@@ -22,7 +22,16 @@ async function bootstrap() {
     .setTitle('OGFI Inventory API')
     .setDescription('Centralized inventory, costing, reporting, and offline sync API')
     .setVersion('0.1.0')
-    .addBearerAuth()
+    .addBearerAuth(
+      {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'JWT',
+        description: 'Paste the JWT access token only. Swagger will add the Bearer prefix.',
+      },
+      'access-token',
+    )
+    .addSecurityRequirements('access-token')
     .build();
   SwaggerModule.setup('api/docs', app, SwaggerModule.createDocument(app, swaggerConfig));
 

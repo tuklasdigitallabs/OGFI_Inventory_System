@@ -240,6 +240,7 @@ Implementation notes:
 - 2026-05-05: Added real audit-log persistence through `AuditService`; login success/failure and logout actions are written to `audit_logs`.
 - 2026-05-05: Refresh token rotation is explicitly deferred. `POST /api/auth/refresh` returns a tracked deferred response until persistent refresh-token storage is added.
 - 2026-05-05: Added a client-side web auth gate that logs in against the API, stores the JWT in local storage, validates the session with `/api/auth/me`, and renders the existing UI shell after login.
+- 2026-05-05: Follow-up fix after Phase 3 testing: Swagger now declares a global JWT bearer security requirement so authorized Swagger requests send the `Authorization` header.
 
 Test evidence:
 
