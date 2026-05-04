@@ -1,4 +1,11 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Req } from '@nestjs/common';
+import { Request } from 'express';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { AuthenticatedUser } from '../auth/types';
+import { LocationAccess } from '../rbac/decorators/location-access.decorator';
+import { Permissions } from '../rbac/decorators/permissions.decorator';
+import { PostLedgerEventDto } from './dto/post-ledger-event.dto';
+import { ReverseLedgerEventDto } from './dto/reverse-ledger-event.dto';
 import { LedgerService } from './ledger.service';
 
 @Controller()
@@ -6,21 +13,49 @@ export class LedgerController {
   constructor(private readonly ledgerService: LedgerService) {}
 
   @Get('inventory/stock-on-hand')
+  @Permissions('inventory.stock:read')
+  @LocationAccess({ source: 'query', key: 'locationId' })
   stockOnHand(@Query() query: Record<string, string>) {
     return this.ledgerService.list('inventory.stock-on-hand', query);
   }
 
   @Get('inventory/movements')
+  @Permissions('inventory.movements:read')
+  @LocationAccess({ source: 'query', key: 'locationId' })
   movements(@Query() query: Record<string, string>) {
     return this.ledgerService.list('inventory.movements', query);
   }
 
   @Post('ledger/events')
-  postEvent(@Body() body: unknown) {
-    return this.ledgerService.action('ledger.events.post', body);
+  @Permissions('ledger.events:post')
+  @LocationAccess({ source: 'body', key: 'locationId' })
+  postEvent(
+    @Body() body: PostLedgerEventDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: Request,
+  ) {
+    return this.ledgerService.postEvent(body, user, {
+      ipAddress: request.ip,
+      userAgent: request.headers['user-agent'],
+    });
+  }
+
+  @Post('ledger/events/:id/reversal')
+  @Permissions('ledger.events:post')
+  reverseEvent(
+    @Param('id') id: string,
+    @Body() body: ReverseLedgerEventDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: Request,
+  ) {
+    return this.ledgerService.reverseEvent(id, body, user, {
+      ipAddress: request.ip,
+      userAgent: request.headers['user-agent'],
+    });
   }
 
   @Get('ledger/events/:id')
+  @Permissions('ledger.events:read')
   getEvent(@Param('id') id: string) {
     return this.ledgerService.list('ledger.events.detail', { id });
   }

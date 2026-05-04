@@ -21,20 +21,20 @@ This is the living handoff and progress tracker for implementing the OGFI centra
 
 ## Current Phase
 
-Phase 1: Database Migration and Seed Foundation
+Phase 3: Immutable Ledger Engine
 
-Current status: `Not Started`
+Current status: `Ready For Test`
 
-Next action: validate the Prisma schema for migration readiness, create the initial migration, and add repeatable seed data for roles, permissions, admin user, locations, UOMs, items, and reason codes.
+Next action: developer verification and sign-off for immutable ledger event posting.
 
 ## Phase Checklist
 
 | Phase | Name | Status | User Sign-Off |
 | --- | --- | --- | --- |
 | 0 | Environment, Dependency, and Baseline Validation | Completed | 2026-05-05 |
-| 1 | Database Migration and Seed Foundation | Not Started | Pending |
-| 2 | Auth, RBAC, and Location Access | Not Started | Pending |
-| 3 | Immutable Ledger Engine | Not Started | Pending |
+| 1 | Database Migration and Seed Foundation | Completed | 2026-05-05 |
+| 2 | Auth, RBAC, and Location Access | Completed | 2026-05-05 |
+| 3 | Immutable Ledger Engine | Ready For Test | Pending |
 | 4 | Stock On Hand and Moving Average Costing | Not Started | Pending |
 | 5 | Inventory UI Wired to Real Data | Not Started | Pending |
 | 6 | Master Data CRUD | Not Started | Pending |
@@ -136,22 +136,22 @@ User sign-off:
 
 ## Phase 1: Database Migration and Seed Foundation
 
-Status: `Not Started`
+Status: `Completed`
 
 Goal: create the first database migration and seed enough baseline data for auth, master data, and inventory testing.
 
 Implementation checklist:
 
-- [ ] Validate and adjust `apps/api/prisma/schema.prisma` if needed.
-- [ ] Create initial Prisma migration.
-- [ ] Add seed script for roles.
-- [ ] Add seed script for permissions.
-- [ ] Add seed script for admin user.
-- [ ] Add seed script for sample locations.
-- [ ] Add seed script for UOMs and conversions.
-- [ ] Add seed script for sample categories/items.
-- [ ] Add seed script for reason codes.
-- [ ] Document seed credentials in a safe local-only way.
+- [x] Validate and adjust `apps/api/prisma/schema.prisma` if needed.
+- [x] Create initial Prisma migration.
+- [x] Add seed script for roles.
+- [x] Add seed script for permissions.
+- [x] Add seed script for admin user.
+- [x] Add seed script for sample locations.
+- [x] Add seed script for UOMs and conversions.
+- [x] Add seed script for sample categories/items.
+- [x] Add seed script for reason codes.
+- [x] Document seed credentials in a safe local-only way.
 
 Acceptance criteria:
 
@@ -160,36 +160,68 @@ Acceptance criteria:
 - Seed script is idempotent or safely repeatable.
 - Baseline data supports the first ledger and inventory UI tests.
 
+Implementation notes:
+
+- 2026-05-05: Validated `apps/api/prisma/schema.prisma` by generating Prisma Client successfully before migration work.
+- 2026-05-05: Created and applied initial migration at `apps/api/prisma/migrations/20260504193938_init/migration.sql`. PostgreSQL was empty before migration creation.
+- 2026-05-05: Added root script `npm run api:prisma:seed`, API script `npm run prisma:seed`, and Prisma seed command `ts-node prisma/seed.ts`.
+- 2026-05-05: Added idempotent seed data for 7 roles, 42 permissions, role-permission mappings, 1 admin user, 4 locations, 7 UOMs, 4 UOM conversions, 5 categories, 6 sample items, and 9 reason codes.
+- 2026-05-05: Seed admin email and username defaults are documented in `apps/api/.env.example`; the actual local development password is stored only in ignored `apps/api/.env` as `SEED_ADMIN_PASSWORD`.
+- 2026-05-05: The seed script requires `SEED_ADMIN_PASSWORD`; it does not commit a real fallback password.
+
 Test evidence:
 
 - Commands run:
+  - `/mnt/c/Windows/System32/cmd.exe /C "cd apps\api && C:\nvm4w\nodejs\npx.cmd prisma migrate status"`
+  - `/mnt/c/Program Files/Docker/Docker/resources/bin/docker.exe exec ogfi-inventory-postgres psql -U ogfi -d ogfi_inventory -c "\dt"`
+  - `/mnt/c/Windows/System32/cmd.exe /C "cd apps\api && C:\nvm4w\nodejs\npx.cmd prisma migrate dev --name init"`
+  - `/mnt/c/Windows/System32/cmd.exe /C "C:\nvm4w\nodejs\npm.cmd run api:prisma:seed"`
+  - `/mnt/c/Windows/System32/cmd.exe /C "C:\nvm4w\nodejs\npm.cmd run api:prisma:seed"`
+  - `/mnt/c/Windows/System32/cmd.exe /C "cd apps\api && C:\nvm4w\nodejs\npx.cmd prisma migrate status"`
+  - `/mnt/c/Program Files/Docker/Docker/resources/bin/docker.exe exec ogfi-inventory-postgres psql -U ogfi -d ogfi_inventory -c "select (select count(*) from roles) as roles, (select count(*) from permissions) as permissions, (select count(*) from users) as users, (select count(*) from locations) as locations, (select count(*) from uoms) as uoms, (select count(*) from uom_conversions) as uom_conversions, (select count(*) from categories) as categories, (select count(*) from items) as items, (select count(*) from reason_codes) as reason_codes;"`
+  - `/mnt/c/Program Files/Docker/Docker/resources/bin/docker.exe exec ogfi-inventory-postgres psql -U ogfi -d ogfi_inventory -c "select r.code, count(rp.\"permissionId\") as permissions from roles r left join role_permissions rp on rp.\"roleId\" = r.id group by r.code order by r.code;"`
+  - `/mnt/c/Program Files/Docker/Docker/resources/bin/docker.exe exec ogfi-inventory-postgres psql -U ogfi -d ogfi_inventory -c "select u.email, u.username, r.code as role, count(ula.\"locationId\") as locations from users u join roles r on r.id = u.\"roleId\" left join user_location_access ula on ula.\"userId\" = u.id group by u.email, u.username, r.code;"`
+  - `/mnt/c/Windows/System32/cmd.exe /C "C:\nvm4w\nodejs\npm.cmd run api:build"`
 - Results:
+  - Initial `prisma migrate status` confirmed no migrations existed and the database was not yet managed by Prisma Migrate.
+  - PostgreSQL table check returned `Did not find any relations`, confirming the local database was clean before the initial migration.
+  - `prisma migrate dev --name init` created `20260504193938_init` and applied it successfully.
+  - Prisma Client generation ran successfully as part of migration application.
+  - Seed command succeeded on the migrated database.
+  - Seed command succeeded again on rerun, confirming repeatability.
+  - Final `prisma migrate status` reported 1 migration found and `Database schema is up to date!`.
+  - Seed counts returned: 7 roles, 42 permissions, 1 user, 4 locations, 7 UOMs, 4 UOM conversions, 5 categories, 6 items, and 9 reason codes.
+  - Admin user check returned `admin@ogfi.local`, username `admin`, role `ADMIN`, and access to 4 locations.
+  - Role-permission counts returned: ADMIN 42, WAREHOUSE_MANAGER 14, PURCHASING 10, BRANCH_MANAGER 15, BRANCH_ENCODER 7, AUDITOR 13, VIEWER 6.
+  - API build passed after migration and seed changes.
 - Issues found:
+  - Plain WSL `node`, `npm`, and `docker` commands remain unavailable or unreliable from this shell; Phase 1 used the Phase 0 validated Windows Node/npm and Docker Desktop command paths.
+  - Plain WSL tooling remains a local environment limitation, but it does not block Phase 1 acceptance when using the validated Windows command paths.
 
 User sign-off:
 
-- Tested by:
-- Date:
-- Approval:
+- Tested by: Developer
+- Date: 2026-05-05
+- Approval: Approved by developer.
 
 ## Phase 2: Auth, RBAC, and Location Access
 
-Status: `Not Started`
+Status: `Completed`
 
 Goal: implement login, JWT auth, current user lookup, role permissions, and location access checks.
 
 Implementation checklist:
 
-- [ ] Add auth DTOs.
-- [ ] Implement password hashing and login.
-- [ ] Implement JWT access token issuing.
-- [ ] Implement refresh token path or explicitly defer it with a tracked note.
-- [ ] Add current user endpoint.
-- [ ] Add auth guard.
-- [ ] Add permission guard.
-- [ ] Add location access guard.
-- [ ] Add audit logs for sensitive auth/admin actions.
-- [ ] Wire UI login state or temporary dev session strategy.
+- [x] Add auth DTOs.
+- [x] Implement password hashing and login.
+- [x] Implement JWT access token issuing.
+- [x] Implement refresh token path or explicitly defer it with a tracked note.
+- [x] Add current user endpoint.
+- [x] Add auth guard.
+- [x] Add permission guard.
+- [x] Add location access guard.
+- [x] Add audit logs for sensitive auth/admin actions.
+- [x] Wire UI login state or temporary dev session strategy.
 
 Acceptance criteria:
 
@@ -199,35 +231,71 @@ Acceptance criteria:
 - Role permission checks work.
 - Location-scoped users cannot access unauthorized locations.
 
+Implementation notes:
+
+- 2026-05-05: Replaced auth placeholder behavior with validated login DTOs, bcrypt password verification, JWT access token issuing, and `GET /api/auth/me` current-user lookup.
+- 2026-05-05: Added global JWT auth guard with `@Public()` support. Auth login and password reset placeholder endpoints are public; existing API routes are protected by default.
+- 2026-05-05: Added permission metadata and global permission guard. Existing route stubs now declare their required permissions so scaffold endpoints enforce RBAC before later business logic is implemented.
+- 2026-05-05: Added location access metadata and guard for location-scoped query/body fields, including stock, movement, ledger post, purchasing, transfers, branch, sales, and sync routes.
+- 2026-05-05: Added real audit-log persistence through `AuditService`; login success/failure and logout actions are written to `audit_logs`.
+- 2026-05-05: Refresh token rotation is explicitly deferred. `POST /api/auth/refresh` returns a tracked deferred response until persistent refresh-token storage is added.
+- 2026-05-05: Added a client-side web auth gate that logs in against the API, stores the JWT in local storage, validates the session with `/api/auth/me`, and renders the existing UI shell after login.
+
 Test evidence:
 
 - Commands run:
+  - `/mnt/c/Windows/System32/cmd.exe /C "C:\nvm4w\nodejs\npm.cmd run api:build"`
+  - `/mnt/c/Windows/System32/cmd.exe /C "C:\nvm4w\nodejs\npm.cmd run api:dev"`
+  - `/mnt/c/Windows/System32/cmd.exe /C "curl -s -i http://localhost:3000/api/auth/me"`
+  - Windows PowerShell `Invoke-RestMethod` login check for seeded admin user `admin`.
+  - Windows PowerShell protected endpoint checks for `/api/auth/me`, `/api/admin/users`, and `/api/inventory/stock-on-hand?locationId=00000000-0000-0000-0000-000000000000`.
+  - Windows PowerShell invalid password check for seeded admin user.
+  - Temporary local PostgreSQL viewer-user insertion, viewer login, `/api/admin/users` RBAC denial check, and cleanup.
+  - `/mnt/c/Program Files/Docker/Docker/resources/bin/docker.exe exec ogfi-inventory-postgres psql -U ogfi -d ogfi_inventory -c "select module, action, count(*) from audit_logs where module = 'auth' group by module, action order by action;"`
+  - `/mnt/c/Windows/System32/cmd.exe /C "C:\nvm4w\nodejs\npm.cmd run web:build"`
+  - `git diff --check`
 - Results:
+  - API build passed after auth/RBAC implementation.
+  - API dev server started successfully and mapped `/api/auth/login`, `/api/auth/me`, and the protected route set.
+  - Anonymous `GET /api/auth/me` returned `401 Unauthorized`.
+  - Valid seeded admin login returned `200` with a bearer access token, current user details, 42 permissions, and 4 location IDs.
+  - Invalid admin password returned `401`.
+  - Authenticated admin `GET /api/auth/me` returned `200`.
+  - Authenticated admin `GET /api/admin/users` returned `200`, proving permitted RBAC access.
+  - Authenticated admin request with an unauthorized fake location ID returned `403`, proving location access enforcement.
+  - Temporary `VIEWER` user login succeeded, but `GET /api/admin/users` returned `403`, proving permission denial. Temporary user, location access, and audit rows were removed after the check.
+  - Auth audit query returned login success and failure rows.
+  - Web build passed after adding the login gate.
+  - `git diff --check` passed.
 - Issues found:
+  - Refresh token rotation is intentionally deferred until persistent refresh-token storage is designed.
+  - Business service implementations remain scaffolded; Phase 2 only enforces auth/RBAC/location access before those handlers.
+  - Plain WSL `node`, `npm`, and `docker` remain unavailable or unreliable from this shell; Phase 2 used the validated Windows Node/npm, PowerShell, and Docker Desktop command paths.
+  - Plain WSL tooling remains a local environment limitation, but it does not block Phase 2 acceptance when using the validated Windows command paths.
 
 User sign-off:
 
-- Tested by:
-- Date:
-- Approval:
+- Tested by: Developer
+- Date: 2026-05-05
+- Approval: Approved by developer.
 
 ## Phase 3: Immutable Ledger Engine
 
-Status: `Not Started`
+Status: `Ready For Test`
 
 Goal: implement the core service for posting immutable inventory ledger events.
 
 Implementation checklist:
 
-- [ ] Add ledger event DTOs.
-- [ ] Implement transaction-safe ledger posting.
-- [ ] Enforce idempotent event UUIDs.
-- [ ] Enforce valid `qtyIn`/`qtyOut` rules.
-- [ ] Prevent direct balance edits.
-- [ ] Implement reversal support for corrections.
-- [ ] Add reference type and reference ID validation hooks.
-- [ ] Add audit logging for ledger posts.
-- [ ] Add unit tests for allowed transaction types.
+- [x] Add ledger event DTOs.
+- [x] Implement transaction-safe ledger posting.
+- [x] Enforce idempotent event UUIDs.
+- [x] Enforce valid `qtyIn`/`qtyOut` rules.
+- [x] Prevent direct balance edits.
+- [x] Implement reversal support for corrections.
+- [x] Add reference type and reference ID validation hooks.
+- [x] Add audit logging for ledger posts.
+- [x] Add unit tests for allowed transaction types.
 
 Acceptance criteria:
 
@@ -237,11 +305,35 @@ Acceptance criteria:
 - Ledger posting runs inside a database transaction.
 - All ledger posts create audit logs.
 
+Implementation notes:
+
+- 2026-05-05: Added typed ledger posting and reversal DTOs for `POST /api/ledger/events` and `POST /api/ledger/events/:id/reversal`.
+- 2026-05-05: Replaced the ledger placeholder post behavior with Prisma transaction-backed event creation. The service computes `extendedCost` from movement quantity and `unitCostAtTime`; callers cannot submit direct balance edits or stored extended costs.
+- 2026-05-05: Added idempotent UUID handling. If a ledger event UUID already exists, posting returns the existing event with `status: already_posted` and does not insert another ledger or audit row.
+- 2026-05-05: Enforced quantity direction rules for all current transaction types: inbound (`RECEIVE`, `TRANSFER_IN`), outbound (`TRANSFER_OUT`, `WASTAGE`, `ISSUE_TO_OPS`, `SALE_CONSUMPTION`), and either-direction correction types (`STOCK_COUNT`, `ADJUSTMENT`).
+- 2026-05-05: Added reference validation hooks for purchase orders, receivings, transfers, wastage, stock counts, issues, sales batches, and sync batches. `ADJUSTMENT` remains a hook-approved internal reference until a dedicated adjustment document model is added.
+- 2026-05-05: Added transaction-scoped audit log writes for ledger posts and reversals.
+- 2026-05-05: Added service-level location access enforcement for ledger posting and reversal posting, including reversal routes where the location is resolved from the original ledger event.
+- 2026-05-05: Added database-level immutability migration `20260505090000_ledger_events_immutable`, which creates PostgreSQL triggers preventing `UPDATE` and `DELETE` on `ledger_events`.
+- 2026-05-05: `GET /api/inventory/movements` and `GET /api/ledger/events/:id` now read ledger events from the database. Stock-on-hand remains deferred to Phase 4.
+
 Test evidence:
 
 - Commands run:
+  - `/mnt/c/Windows/System32/cmd.exe /C "C:\nvm4w\nodejs\npx.cmd prettier --single-quote --write apps/api/src/ledger/ledger.service.ts apps/api/src/ledger/ledger.controller.ts apps/api/src/ledger/dto/post-ledger-event.dto.ts apps/api/src/ledger/dto/reverse-ledger-event.dto.ts apps/api/src/ledger/ledger.service.spec.ts"`
+  - `/mnt/c/Windows/System32/cmd.exe /C "C:\nvm4w\nodejs\npm.cmd run test -w apps/api -- ledger.service.spec.ts"`
+  - `/mnt/c/Windows/System32/cmd.exe /C "C:\nvm4w\nodejs\npm.cmd run api:build"`
+  - `/mnt/c/Windows/System32/cmd.exe /C "C:\nvm4w\nodejs\npm.cmd run api:prisma:migrate"`
+  - `/mnt/c/Windows/System32/cmd.exe /C "C:\nvm4w\nodejs\npm.cmd run api:prisma:generate"`
+  - `/mnt/c/Windows/System32/cmd.exe /C "tasklist"`
+  - `/mnt/c/Windows/System32/cmd.exe /C "C:\nvm4w\nodejs\npm.cmd run api:build"`
 - Results:
+  - Ledger unit tests passed: 11 tests covering all eight transaction types, duplicate UUID idempotency, invalid quantity rejection, and reversal posting/audit logging.
+  - API build passed before and after applying the migration.
+  - Prisma migration applied successfully to local PostgreSQL: `20260505090000_ledger_events_immutable`.
+  - Database reported in sync after migration application.
 - Issues found:
+  - Prisma Client generation failed after migration application with Windows `EPERM` while renaming `node_modules\.prisma\client\query_engine-windows.dll.node`. Multiple Windows `node.exe` processes were active, so no process was killed automatically. No Prisma schema shape changed in Phase 3, and the API build still passed using the existing generated client.
 
 User sign-off:
 

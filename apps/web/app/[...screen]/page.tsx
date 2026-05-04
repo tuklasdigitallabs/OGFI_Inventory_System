@@ -1,4 +1,5 @@
 import { AppShell } from '@/components/app-shell';
+import { AuthGate } from '@/components/auth-gate';
 import { ScreenPage } from '@/components/screen-page';
 import { getScreen, screens } from '@/lib/screens';
 
@@ -17,8 +18,10 @@ export default async function ScreenRoute({ params }: ScreenRouteProps) {
   const slug = screen.join('/');
 
   return (
-    <AppShell>
-      <ScreenPage screen={getScreen(slug)} />
-    </AppShell>
+    <AuthGate>
+      <AppShell>
+        <ScreenPage screen={getScreen(slug)} />
+      </AppShell>
+    </AuthGate>
   );
 }

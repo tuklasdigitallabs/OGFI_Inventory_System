@@ -1,32 +1,57 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Get, Post, Req } from '@nestjs/common';
+import { Request } from 'express';
+import { CurrentUser } from './decorators/current-user.decorator';
+import { Public } from './decorators/public.decorator';
+import { LoginDto } from './dto/login.dto';
 import { AuthService } from './auth.service';
+import { AuthenticatedUser } from './types';
 
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
+  @Public()
   @Post('login')
-  login(@Body() body: unknown) {
-    return this.authService.action('login', body);
+  login(@Body() body: LoginDto, @Req() request: Request) {
+    return this.authService.login(body, {
+      ipAddress: request.ip,
+      userAgent: request.headers['user-agent'],
+    });
   }
 
   @Post('refresh')
-  refresh(@Body() body: unknown) {
-    return this.authService.action('refresh', body);
+  refresh() {
+    return this.authService.refresh();
   }
 
   @Post('logout')
-  logout(@Body() body: unknown) {
-    return this.authService.action('logout', body);
+  logout(@CurrentUser() user: AuthenticatedUser, @Req() request: Request) {
+    return this.authService.logout(user, {
+      ipAddress: request.ip,
+      userAgent: request.headers['user-agent'],
+    });
   }
 
+  @Get('me')
+  me(@CurrentUser() user: AuthenticatedUser) {
+    return this.authService.currentUser(user);
+  }
+
+  @Public()
   @Post('password-reset/request')
-  requestPasswordReset(@Body() body: unknown) {
-    return this.authService.action('password-reset/request', body);
+  requestPasswordReset() {
+    return {
+      status: 'deferred',
+      next: 'Password reset workflow will be implemented with notification support.',
+    };
   }
 
+  @Public()
   @Post('password-reset/confirm')
-  confirmPasswordReset(@Body() body: unknown) {
-    return this.authService.action('password-reset/confirm', body);
+  confirmPasswordReset() {
+    return {
+      status: 'deferred',
+      next: 'Password reset workflow will be implemented with notification support.',
+    };
   }
 }
