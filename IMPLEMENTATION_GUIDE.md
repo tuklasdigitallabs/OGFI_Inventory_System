@@ -267,6 +267,7 @@ Test evidence:
   - Temporary `VIEWER` user login succeeded, but `GET /api/admin/users` returned `403`, proving permission denial. Temporary user, location access, and audit rows were removed after the check.
   - Auth audit query returned login success and failure rows.
   - Web build passed after adding the login gate.
+  - Developer retest confirmed Swagger authorization now sends the bearer token correctly; `GET /api/auth/me` returned the authenticated admin user from Swagger.
   - `git diff --check` passed.
 - Issues found:
   - Refresh token rotation is intentionally deferred until persistent refresh-token storage is designed.
