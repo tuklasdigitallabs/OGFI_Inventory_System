@@ -23,15 +23,15 @@ This is the living handoff and progress tracker for implementing the OGFI centra
 
 Phase 0: Environment, Dependency, and Baseline Validation
 
-Current status: `Blocked`
+Current status: `Ready For Test`
 
-Next action: fix the local terminal/runtime environment so Node, npm, and Docker are reachable, then rerun the Phase 0 validation commands.
+Next action: developer review/sign-off for Phase 0, then proceed to Phase 1.
 
 ## Phase Checklist
 
 | Phase | Name | Status | User Sign-Off |
 | --- | --- | --- | --- |
-| 0 | Environment, Dependency, and Baseline Validation | Blocked | Pending |
+| 0 | Environment, Dependency, and Baseline Validation | Ready For Test | Pending |
 | 1 | Database Migration and Seed Foundation | Not Started | Pending |
 | 2 | Auth, RBAC, and Location Access | Not Started | Pending |
 | 3 | Immutable Ledger Engine | Not Started | Pending |
@@ -47,21 +47,21 @@ Next action: fix the local terminal/runtime environment so Node, npm, and Docker
 
 ## Phase 0: Environment, Dependency, and Baseline Validation
 
-Status: `Blocked`
+Status: `Ready For Test`
 
 Goal: establish a working local development baseline for API, web, Prisma, and database services.
 
 Implementation checklist:
 
-- [ ] Confirm Node/npm can run from the chosen terminal environment.
-- [ ] Run `npm install`.
+- [x] Confirm Node/npm can run from the chosen terminal environment.
+- [x] Run `npm install`.
 - [x] Confirm workspace scripts are available.
-- [ ] Start PostgreSQL and Redis using `docker compose up -d`.
-- [ ] Validate Prisma schema using `npm run api:prisma:generate`.
-- [ ] Build API using `npm run api:build`.
-- [ ] Build UI using `npm run web:build`.
-- [ ] Confirm API dev server can start.
-- [ ] Confirm web dev server can start.
+- [x] Start PostgreSQL and Redis using `docker compose up -d`.
+- [x] Validate Prisma schema using `npm run api:prisma:generate`.
+- [x] Build API using `npm run api:build`.
+- [x] Build UI using `npm run web:build`.
+- [x] Confirm API dev server can start.
+- [x] Confirm web dev server can start.
 
 Acceptance criteria:
 
@@ -77,6 +77,10 @@ Implementation notes:
 - 2026-05-05: `node_modules` and `package-lock.json` exist, so dependencies appear to have been installed previously, but npm cannot currently run from this terminal to verify or refresh them.
 - 2026-05-05: API and web scaffolds exist. API modules and controllers are present, but service implementations still return placeholder responses. The web shell and screens exist, but inventory/dashboard data is static mock data.
 - 2026-05-05: Docker compose defines PostgreSQL 16 and Redis 7 services, but Docker is not reachable from the current WSL shell.
+- 2026-05-05: Phase 0 validation succeeded by running the Windows Node/npm toolchain through `cmd.exe` and Docker Desktop through `docker.exe`. Plain WSL `node`, `npm`, and `docker` commands still are not the runnable path in this shell.
+- 2026-05-05: Created ignored local file `apps/api/.env` from `apps/api/.env.example` for development server validation.
+- 2026-05-05: API and web dev servers both started successfully and were stopped after validation. API Swagger responded from Windows curl at `http://localhost:3000/api/docs`; web responded from Windows curl at `http://localhost:3001`.
+- 2026-05-05: `npm install` reported 29 audit findings: 4 low, 16 moderate, and 9 high. No dependency changes were made during Phase 0.
 
 Test evidence:
 
@@ -86,14 +90,43 @@ Test evidence:
   - `npm run`
   - `docker compose ps`
   - `/mnt/c/nvm4w/nodejs/node.exe --version`
+  - `/mnt/c/Windows/System32/cmd.exe /C "C:\nvm4w\nodejs\node.exe --version"`
+  - `/mnt/c/Windows/System32/cmd.exe /C "C:\nvm4w\nodejs\npm.cmd --version"`
+  - `/mnt/c/Windows/System32/cmd.exe /C "C:\nvm4w\nodejs\npm.cmd run"`
+  - `/mnt/c/Windows/System32/cmd.exe /C "C:\nvm4w\nodejs\npm.cmd install"`
+  - `/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command "Start-Process -FilePath 'C:\Program Files\Docker\Docker\Docker Desktop.exe'"`
+  - `/mnt/c/Program Files/Docker/Docker/resources/bin/docker.exe version`
+  - `/mnt/c/Program Files/Docker/Docker/resources/bin/docker.exe compose up -d`
+  - `/mnt/c/Program Files/Docker/Docker/resources/bin/docker.exe compose ps`
+  - `/mnt/c/Windows/System32/cmd.exe /C "C:\nvm4w\nodejs\npm.cmd run api:prisma:generate"`
+  - `/mnt/c/Windows/System32/cmd.exe /C "C:\nvm4w\nodejs\npm.cmd run api:build"`
+  - `/mnt/c/Windows/System32/cmd.exe /C "C:\nvm4w\nodejs\npm.cmd run web:build"`
+  - `/mnt/c/Windows/System32/cmd.exe /C "C:\nvm4w\nodejs\npm.cmd run api:dev"`
+  - `/mnt/c/Windows/System32/cmd.exe /C "curl -I http://localhost:3000/api/docs"`
+  - `/mnt/c/Windows/System32/cmd.exe /C "C:\nvm4w\nodejs\npm.cmd run web:dev"`
+  - `/mnt/c/Windows/System32/cmd.exe /C "curl -I http://localhost:3001"`
 - Results:
   - `node --version` failed because `node` is not found in the current shell.
   - `npm --version` and `npm run` failed with `WSL 1 is not supported. Please upgrade to WSL 2 or above. Could not determine Node.js install directory`.
   - `docker compose ps` failed because Docker is not available in this WSL distro.
   - `/mnt/c/nvm4w/nodejs/node.exe --version` failed from WSL with `UtilBindVsockAnyPort` socket error, even though `node.exe`, `npm`, and `npm.cmd` exist under `/mnt/c/nvm4w/nodejs`.
+  - Windows Node via `cmd.exe` returned `v20.20.1`.
+  - Windows npm via `cmd.exe` returned `10.8.2`.
+  - Workspace scripts listed successfully.
+  - `npm install` completed successfully; dependency tree was already up to date.
+  - Docker Desktop started successfully.
+  - Docker Engine responded successfully: Docker Desktop 4.62.0, engine 29.2.1.
+  - Docker Compose started PostgreSQL and Redis successfully.
+  - `docker.exe compose ps` showed PostgreSQL `healthy` and Redis `Up`.
+  - Prisma Client generated successfully.
+  - API build passed.
+  - Web build passed and generated static routes.
+  - API dev server started successfully; Windows curl returned `HTTP/1.1 200 OK` for `/api/docs`.
+  - Web dev server started successfully; Windows curl returned `HTTP/1.1 200 OK` for `/`.
 - Issues found:
-  - Phase 0 is blocked until the chosen terminal can run Node/npm and reach Docker Desktop or a local Docker engine.
-  - Prisma generation, API build, web build, and dev server checks could not be executed because npm is not runnable in this environment.
+  - Plain WSL commands `node`, `npm`, and `docker` remain unavailable or misrouted in this shell; use the validated Windows command paths until WSL-native tooling is installed/configured.
+  - WSL curl could not reach Windows-bound dev servers via `localhost`; Windows curl validated them successfully.
+  - `npm install` reported dependency audit findings that should be reviewed before production hardening.
 
 User sign-off:
 
