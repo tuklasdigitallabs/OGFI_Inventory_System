@@ -1,0 +1,22 @@
+{
+  "name": "ogfi-inventory",
+  "private": true,
+  "version": "0.1.0",
+  "description": "OGFI centralized inventory and costing system",
+  "workspaces": [
+    "apps/api",
+    "apps/web"
+  ],
+  "scripts": {
+    "api:dev": "npm run start:dev -w apps/api",
+    "api:build": "npm run build -w apps/api",
+    "api:prisma:generate": "npm run prisma:generate -w apps/api",
+    "api:prisma:migrate": "npm run prisma:migrate -w apps/api",
+    "web:dev": "npm run dev -w apps/web",
+    "web:build": "npm run build -w apps/web",
+    "web:lint": "npm run lint -w apps/web"
+  },
+  "dependencies": {
+    "lucide-react": "^1.14.0"
+  }
+}

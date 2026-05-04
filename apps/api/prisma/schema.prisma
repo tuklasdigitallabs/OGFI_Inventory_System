@@ -1,0 +1,708 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RoleCode {
+  ADMIN
+  WAREHOUSE_MANAGER
+  PURCHASING
+  BRANCH_MANAGER
+  BRANCH_ENCODER
+  AUDITOR
+  VIEWER
+}
+
+enum LocationType {
+  WAREHOUSE
+  BRANCH
+}
+
+enum ItemType {
+  RAW_MATERIAL
+  PACKAGING
+  SUPPLY
+  FINISHED_GOOD
+  SEMI_FINISHED
+}
+
+enum TransactionType {
+  RECEIVE
+  TRANSFER_OUT
+  TRANSFER_IN
+  WASTAGE
+  STOCK_COUNT
+  ADJUSTMENT
+  ISSUE_TO_OPS
+  SALE_CONSUMPTION
+}
+
+enum ReferenceType {
+  PO
+  RECEIVING
+  TRANSFER
+  WASTAGE
+  COUNT
+  ISSUE
+  SALES_BATCH
+  ADJUSTMENT
+  SYNC_BATCH
+}
+
+enum DocumentStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  PARTIALLY_RECEIVED
+  POSTED
+  CLOSED
+  CANCELLED
+  REJECTED
+}
+
+enum TransferStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  DISPATCHED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  VARIANCE_REVIEW
+  CLOSED
+  CANCELLED
+}
+
+enum CountStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  POSTED
+  REJECTED
+}
+
+enum ReportStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum ReportFormat {
+  XLSX
+  PDF
+  CSV
+}
+
+enum SyncBatchStatus {
+  RECEIVED
+  PROCESSING
+  COMPLETED
+  COMPLETED_WITH_REJECTIONS
+  FAILED
+}
+
+enum SyncEventStatus {
+  PENDING
+  PROCESSED
+  ALREADY_PROCESSED
+  REJECTED
+}
+
+enum ReasonCodeType {
+  WASTAGE
+  ADJUSTMENT
+  VARIANCE
+  CANCELLATION
+}
+
+model User {
+  id                String               @id @default(uuid()) @db.Uuid
+  email             String               @unique
+  username          String               @unique
+  passwordHash      String
+  fullName          String
+  active            Boolean              @default(true)
+  roleId            String               @db.Uuid
+  role              Role                 @relation(fields: [roleId], references: [id])
+  locationAccess    UserLocationAccess[]
+  auditLogs         AuditLog[]
+  createdLedger     LedgerEvent[]        @relation("LedgerCreatedBy")
+  approvedLedger    LedgerEvent[]        @relation("LedgerApprovedBy")
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  @@index([roleId])
+  @@map("users")
+}
+
+model Role {
+  id          String           @id @default(uuid()) @db.Uuid
+  code        RoleCode         @unique
+  name        String
+  description String?
+  users       User[]
+  permissions RolePermission[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String           @id @default(uuid()) @db.Uuid
+  module      String
+  action      String
+  description String?
+  roles       RolePermission[]
+  createdAt   DateTime         @default(now())
+
+  @@unique([module, action])
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String     @db.Uuid
+  permissionId String     @db.Uuid
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model Location {
+  id             String               @id @default(uuid()) @db.Uuid
+  code           String               @unique
+  name           String
+  type           LocationType
+  active         Boolean              @default(true)
+  userAccess     UserLocationAccess[]
+  purchaseOrders PurchaseOrder[]
+  receivings     Receiving[]
+  ledgerEvents   LedgerEvent[]
+  stockCounts    StockCount[]
+  wastage        Wastage[]
+  issues         IssueToOps[]
+  salesBatches   SalesBatch[]
+  syncBatches    SyncBatch[]
+  sourceTransfers Transfer[]          @relation("TransferSourceLocation")
+  targetTransfers Transfer[]          @relation("TransferTargetLocation")
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  @@index([type, active])
+  @@map("locations")
+}
+
+model UserLocationAccess {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @db.Uuid
+  locationId String   @db.Uuid
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, locationId])
+  @@index([locationId])
+  @@map("user_location_access")
+}
+
+model Uom {
+  id                  String          @id @default(uuid()) @db.Uuid
+  code                String          @unique
+  name                String
+  active              Boolean         @default(true)
+  items               Item[]
+  conversionsFrom     UomConversion[] @relation("ConversionFromUom")
+  conversionsTo       UomConversion[] @relation("ConversionToUom")
+  purchaseOrderLines  PurchaseOrderLine[]
+  recipeLines         RecipeLine[]
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  @@map("uoms")
+}
+
+model UomConversion {
+  id        String   @id @default(uuid()) @db.Uuid
+  fromUomId String   @db.Uuid
+  toUomId   String   @db.Uuid
+  factor    Decimal  @db.Decimal(18, 6)
+  fromUom   Uom      @relation("ConversionFromUom", fields: [fromUomId], references: [id])
+  toUom     Uom      @relation("ConversionToUom", fields: [toUomId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@unique([fromUomId, toUomId])
+  @@map("uom_conversions")
+}
+
+model Category {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique
+  active    Boolean  @default(true)
+  items     Item[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("categories")
+}
+
+model Item {
+  id                 String              @id @default(uuid()) @db.Uuid
+  sku                String              @unique
+  name               String
+  itemType           ItemType
+  categoryId         String?             @db.Uuid
+  baseUomId          String              @db.Uuid
+  lowStockThreshold  Decimal?            @db.Decimal(18, 6)
+  active             Boolean             @default(true)
+  category           Category?           @relation(fields: [categoryId], references: [id])
+  baseUom            Uom                 @relation(fields: [baseUomId], references: [id])
+  supplierItems      SupplierItem[]
+  purchaseOrderLines PurchaseOrderLine[]
+  receivingLines     ReceivingLine[]
+  transferLines      TransferLine[]
+  ledgerEvents       LedgerEvent[]
+  stockCountLines    StockCountLine[]
+  wastageLines       WastageLine[]
+  issueLines         IssueToOpsLine[]
+  recipeOutputs      Recipe[]            @relation("RecipeOutputItem")
+  recipeIngredients  RecipeLine[]         @relation("RecipeIngredientItem")
+  salesBatchLines    SalesBatchLine[]
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  @@index([categoryId])
+  @@index([baseUomId])
+  @@index([itemType, active])
+  @@map("items")
+}
+
+model Supplier {
+  id                 String              @id @default(uuid()) @db.Uuid
+  name               String
+  contactName        String?
+  email              String?
+  phone              String?
+  paymentTerms       String?
+  active             Boolean             @default(true)
+  supplierItems      SupplierItem[]
+  purchaseOrders     PurchaseOrder[]
+  receivings         Receiving[]
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  @@index([active])
+  @@map("suppliers")
+}
+
+model SupplierItem {
+  id         String   @id @default(uuid()) @db.Uuid
+  supplierId String   @db.Uuid
+  itemId     String   @db.Uuid
+  unitCost   Decimal? @db.Decimal(18, 6)
+  active     Boolean  @default(true)
+  supplier   Supplier @relation(fields: [supplierId], references: [id])
+  item       Item     @relation(fields: [itemId], references: [id])
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([supplierId, itemId])
+  @@index([itemId])
+  @@map("supplier_items")
+}
+
+model Recipe {
+  id             String       @id @default(uuid()) @db.Uuid
+  outputItemId   String       @db.Uuid
+  version        Int          @default(1)
+  servingQty     Decimal      @db.Decimal(18, 6)
+  yieldPercent   Decimal      @default(100) @db.Decimal(5, 2)
+  wastageFactor  Decimal      @default(0) @db.Decimal(5, 2)
+  active         Boolean      @default(true)
+  outputItem     Item         @relation("RecipeOutputItem", fields: [outputItemId], references: [id])
+  lines          RecipeLine[]
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([outputItemId, version])
+  @@index([active])
+  @@map("recipes")
+}
+
+model RecipeLine {
+  id           String   @id @default(uuid()) @db.Uuid
+  recipeId     String   @db.Uuid
+  ingredientId String   @db.Uuid
+  qty           Decimal  @db.Decimal(18, 6)
+  uomId         String   @db.Uuid
+  recipe       Recipe   @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  ingredient   Item     @relation("RecipeIngredientItem", fields: [ingredientId], references: [id])
+  uom          Uom      @relation(fields: [uomId], references: [id])
+
+  @@index([ingredientId])
+  @@map("recipe_lines")
+}
+
+model PurchaseOrder {
+  id             String              @id @default(uuid()) @db.Uuid
+  poNumber       String              @unique
+  supplierId     String              @db.Uuid
+  locationId     String              @db.Uuid
+  status         DocumentStatus      @default(DRAFT)
+  expectedDate   DateTime?
+  remarks        String?
+  supplier       Supplier            @relation(fields: [supplierId], references: [id])
+  location       Location            @relation(fields: [locationId], references: [id])
+  lines          PurchaseOrderLine[]
+  receivings     Receiving[]
+  createdById    String?             @db.Uuid
+  approvedById   String?             @db.Uuid
+  submittedAt    DateTime?
+  approvedAt     DateTime?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  @@index([supplierId])
+  @@index([locationId, status])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderLine {
+  id              String        @id @default(uuid()) @db.Uuid
+  purchaseOrderId String        @db.Uuid
+  itemId          String        @db.Uuid
+  qty             Decimal       @db.Decimal(18, 6)
+  uomId           String        @db.Uuid
+  unitCost        Decimal       @db.Decimal(18, 6)
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  item            Item          @relation(fields: [itemId], references: [id])
+  uom             Uom           @relation(fields: [uomId], references: [id])
+
+  @@index([itemId])
+  @@map("purchase_order_lines")
+}
+
+model Receiving {
+  id              String          @id @default(uuid()) @db.Uuid
+  receivingNumber String          @unique
+  purchaseOrderId String?         @db.Uuid
+  supplierId       String          @db.Uuid
+  locationId       String          @db.Uuid
+  status           DocumentStatus  @default(POSTED)
+  drReference      String?
+  invoiceReference String?
+  remarks          String?
+  businessDate     DateTime
+  purchaseOrder    PurchaseOrder?  @relation(fields: [purchaseOrderId], references: [id])
+  supplier         Supplier        @relation(fields: [supplierId], references: [id])
+  location         Location        @relation(fields: [locationId], references: [id])
+  lines            ReceivingLine[]
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@index([purchaseOrderId])
+  @@index([supplierId])
+  @@index([locationId, businessDate])
+  @@map("receivings")
+}
+
+model ReceivingLine {
+  id            String    @id @default(uuid()) @db.Uuid
+  receivingId   String    @db.Uuid
+  itemId        String    @db.Uuid
+  acceptedQty   Decimal   @db.Decimal(18, 6)
+  rejectedQty   Decimal   @default(0) @db.Decimal(18, 6)
+  unitCost      Decimal   @db.Decimal(18, 6)
+  receiving     Receiving @relation(fields: [receivingId], references: [id], onDelete: Cascade)
+  item          Item      @relation(fields: [itemId], references: [id])
+
+  @@index([itemId])
+  @@map("receiving_lines")
+}
+
+model Transfer {
+  id               String          @id @default(uuid()) @db.Uuid
+  transferNumber   String          @unique
+  sourceLocationId String          @db.Uuid
+  targetLocationId String          @db.Uuid
+  status           TransferStatus  @default(DRAFT)
+  neededDate       DateTime?
+  remarks          String?
+  varianceNotes    String?
+  sourceLocation   Location        @relation("TransferSourceLocation", fields: [sourceLocationId], references: [id])
+  targetLocation   Location        @relation("TransferTargetLocation", fields: [targetLocationId], references: [id])
+  lines            TransferLine[]
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@index([sourceLocationId, status])
+  @@index([targetLocationId, status])
+  @@map("transfers")
+}
+
+model TransferLine {
+  id           String   @id @default(uuid()) @db.Uuid
+  transferId   String   @db.Uuid
+  itemId       String   @db.Uuid
+  requestedQty Decimal  @db.Decimal(18, 6)
+  pickedQty    Decimal? @db.Decimal(18, 6)
+  receivedQty  Decimal? @db.Decimal(18, 6)
+  unitCost     Decimal? @db.Decimal(18, 6)
+  transfer     Transfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  item         Item     @relation(fields: [itemId], references: [id])
+
+  @@index([itemId])
+  @@map("transfer_lines")
+}
+
+model LedgerEvent {
+  id             String          @id @default(uuid()) @db.Uuid
+  uuid           String          @unique @db.Uuid
+  locationId     String          @db.Uuid
+  itemId         String          @db.Uuid
+  transactionType TransactionType
+  qtyIn          Decimal         @default(0) @db.Decimal(18, 6)
+  qtyOut         Decimal         @default(0) @db.Decimal(18, 6)
+  unitCostAtTime Decimal         @db.Decimal(18, 6)
+  extendedCost   Decimal         @db.Decimal(18, 6)
+  referenceType  ReferenceType
+  referenceId    String          @db.Uuid
+  businessDate   DateTime
+  createdById    String          @db.Uuid
+  approvedById   String?         @db.Uuid
+  reversalOfId   String?         @db.Uuid
+  metadata       Json?
+  location       Location        @relation(fields: [locationId], references: [id])
+  item           Item            @relation(fields: [itemId], references: [id])
+  createdBy      User            @relation("LedgerCreatedBy", fields: [createdById], references: [id])
+  approvedBy     User?           @relation("LedgerApprovedBy", fields: [approvedById], references: [id])
+  reversalOf     LedgerEvent?    @relation("LedgerReversal", fields: [reversalOfId], references: [id])
+  reversals      LedgerEvent[]   @relation("LedgerReversal")
+  createdAt      DateTime        @default(now())
+
+  @@index([locationId, itemId, businessDate])
+  @@index([businessDate])
+  @@index([transactionType])
+  @@index([referenceType, referenceId])
+  @@map("ledger_events")
+}
+
+model StockCount {
+  id           String           @id @default(uuid()) @db.Uuid
+  countNumber  String           @unique
+  locationId   String           @db.Uuid
+  status       CountStatus      @default(DRAFT)
+  businessDate DateTime
+  submittedAt  DateTime?
+  approvedAt   DateTime?
+  location     Location         @relation(fields: [locationId], references: [id])
+  lines        StockCountLine[]
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  @@index([locationId, businessDate])
+  @@map("stock_counts")
+}
+
+model StockCountLine {
+  id           String     @id @default(uuid()) @db.Uuid
+  stockCountId String     @db.Uuid
+  itemId       String     @db.Uuid
+  countedQty   Decimal    @db.Decimal(18, 6)
+  systemQty    Decimal?   @db.Decimal(18, 6)
+  varianceQty  Decimal?   @db.Decimal(18, 6)
+  stockCount   StockCount @relation(fields: [stockCountId], references: [id], onDelete: Cascade)
+  item         Item       @relation(fields: [itemId], references: [id])
+
+  @@unique([stockCountId, itemId])
+  @@index([itemId])
+  @@map("stock_count_lines")
+}
+
+model ReasonCode {
+  id          String         @id @default(uuid()) @db.Uuid
+  code        String
+  name        String
+  type        ReasonCodeType
+  active      Boolean        @default(true)
+  wastage     Wastage[]
+  auditLogs   AuditLog[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@unique([type, code])
+  @@map("reason_codes")
+}
+
+model Wastage {
+  id           String        @id @default(uuid()) @db.Uuid
+  wastageNumber String       @unique
+  locationId   String        @db.Uuid
+  reasonCodeId String        @db.Uuid
+  status       CountStatus   @default(DRAFT)
+  businessDate DateTime
+  remarks      String?
+  photoUrl     String?
+  location     Location      @relation(fields: [locationId], references: [id])
+  reasonCode   ReasonCode    @relation(fields: [reasonCodeId], references: [id])
+  lines        WastageLine[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@index([locationId, businessDate])
+  @@index([reasonCodeId])
+  @@map("wastage")
+}
+
+model WastageLine {
+  id        String  @id @default(uuid()) @db.Uuid
+  wastageId String  @db.Uuid
+  itemId    String  @db.Uuid
+  qty       Decimal @db.Decimal(18, 6)
+  unitCost  Decimal? @db.Decimal(18, 6)
+  wastage   Wastage @relation(fields: [wastageId], references: [id], onDelete: Cascade)
+  item      Item    @relation(fields: [itemId], references: [id])
+
+  @@index([itemId])
+  @@map("wastage_lines")
+}
+
+model IssueToOps {
+  id           String           @id @default(uuid()) @db.Uuid
+  issueNumber  String           @unique
+  locationId   String           @db.Uuid
+  businessDate DateTime
+  remarks      String?
+  location     Location         @relation(fields: [locationId], references: [id])
+  lines        IssueToOpsLine[]
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  @@index([locationId, businessDate])
+  @@map("issue_to_ops")
+}
+
+model IssueToOpsLine {
+  id          String     @id @default(uuid()) @db.Uuid
+  issueToOpsId String    @db.Uuid
+  itemId      String     @db.Uuid
+  qty         Decimal    @db.Decimal(18, 6)
+  unitCost    Decimal?   @db.Decimal(18, 6)
+  issueToOps  IssueToOps @relation(fields: [issueToOpsId], references: [id], onDelete: Cascade)
+  item        Item       @relation(fields: [itemId], references: [id])
+
+  @@index([itemId])
+  @@map("issue_to_ops_lines")
+}
+
+model SalesBatch {
+  id           String           @id @default(uuid()) @db.Uuid
+  batchNumber  String           @unique
+  locationId   String           @db.Uuid
+  status       DocumentStatus   @default(DRAFT)
+  businessDate DateTime
+  sourceFileUrl String?
+  location     Location         @relation(fields: [locationId], references: [id])
+  lines        SalesBatchLine[]
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  @@index([locationId, businessDate])
+  @@map("sales_batches")
+}
+
+model SalesBatchLine {
+  id           String     @id @default(uuid()) @db.Uuid
+  salesBatchId String     @db.Uuid
+  itemId       String     @db.Uuid
+  qtySold      Decimal    @db.Decimal(18, 6)
+  salesBatch   SalesBatch @relation(fields: [salesBatchId], references: [id], onDelete: Cascade)
+  item         Item       @relation(fields: [itemId], references: [id])
+
+  @@index([itemId])
+  @@map("sales_batch_lines")
+}
+
+model ReportRun {
+  id          String       @id @default(uuid()) @db.Uuid
+  reportKey   String
+  status      ReportStatus @default(QUEUED)
+  format      ReportFormat
+  parameters  Json
+  outputUrl   String?
+  error       String?
+  requestedById String?    @db.Uuid
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([reportKey, status])
+  @@index([createdAt])
+  @@map("report_runs")
+}
+
+model AuditLog {
+  id           String      @id @default(uuid()) @db.Uuid
+  userId       String?     @db.Uuid
+  module       String
+  action       String
+  entityType   String?
+  entityId     String?     @db.Uuid
+  locationId   String?     @db.Uuid
+  reasonCodeId String?     @db.Uuid
+  before       Json?
+  after        Json?
+  ipAddress    String?
+  userAgent    String?
+  user         User?       @relation(fields: [userId], references: [id])
+  reasonCode   ReasonCode? @relation(fields: [reasonCodeId], references: [id])
+  createdAt    DateTime    @default(now())
+
+  @@index([userId])
+  @@index([module, action])
+  @@index([locationId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model SyncBatch {
+  id              String          @id @default(uuid()) @db.Uuid
+  uuid            String          @unique @db.Uuid
+  deviceId        String
+  locationId      String          @db.Uuid
+  status          SyncBatchStatus @default(RECEIVED)
+  clientCreatedAt DateTime
+  appVersion      String?
+  error           String?
+  location        Location        @relation(fields: [locationId], references: [id])
+  events          SyncEvent[]
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@index([deviceId])
+  @@index([locationId, status])
+  @@map("sync_batches")
+}
+
+model SyncEvent {
+  id           String          @id @default(uuid()) @db.Uuid
+  uuid         String          @unique @db.Uuid
+  syncBatchId  String          @db.Uuid
+  eventType    TransactionType
+  payload      Json
+  status       SyncEventStatus @default(PENDING)
+  rejectionReason String?
+  processedAt  DateTime?
+  syncBatch    SyncBatch       @relation(fields: [syncBatchId], references: [id], onDelete: Cascade)
+
+  @@index([syncBatchId, status])
+  @@index([eventType])
+  @@map("sync_events")
+}

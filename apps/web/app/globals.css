@@ -1,0 +1,58 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --og-green: #0e4d13;
+  --og-orange: #f3ab1b;
+  --og-beige: #ffdca6;
+  --og-dark: #1c1c1c;
+  --og-gray: #6b7280;
+  --og-line: #e5e7eb;
+  --og-error: #dc2626;
+  --og-info: #2563eb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: #f7f8f5;
+}
+
+body {
+  margin: 0;
+  color: var(--og-dark);
+  background: #f7f8f5;
+  font-variant-numeric: tabular-nums;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--og-green);
+  outline-offset: 2px;
+}
+
+@layer components {
+  .og-card {
+    @apply rounded-card border border-og-line bg-white p-4 shadow-soft;
+  }
+
+  .og-table-cell {
+    @apply whitespace-nowrap px-3 py-2 text-xs text-og-dark;
+  }
+
+  .og-table-header {
+    @apply whitespace-nowrap bg-white px-3 py-2 text-left text-xs font-bold text-og-dark;
+  }
+}
