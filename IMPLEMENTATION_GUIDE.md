@@ -21,11 +21,11 @@ This is the living handoff and progress tracker for implementing the OGFI centra
 
 ## Current Phase
 
-Phase 3: Immutable Ledger Engine
+Phase 4: Stock On Hand and Moving Average Costing
 
-Current status: `Ready For Test`
+Current status: `Not Started`
 
-Next action: developer verification and sign-off for immutable ledger event posting.
+Next action: implement stock-on-hand queries and moving average costing from immutable ledger events.
 
 ## Phase Checklist
 
@@ -34,7 +34,7 @@ Next action: developer verification and sign-off for immutable ledger event post
 | 0 | Environment, Dependency, and Baseline Validation | Completed | 2026-05-05 |
 | 1 | Database Migration and Seed Foundation | Completed | 2026-05-05 |
 | 2 | Auth, RBAC, and Location Access | Completed | 2026-05-05 |
-| 3 | Immutable Ledger Engine | Ready For Test | Pending |
+| 3 | Immutable Ledger Engine | Completed | 2026-05-05 |
 | 4 | Stock On Hand and Moving Average Costing | Not Started | Pending |
 | 5 | Inventory UI Wired to Real Data | Not Started | Pending |
 | 6 | Master Data CRUD | Not Started | Pending |
@@ -281,7 +281,7 @@ User sign-off:
 
 ## Phase 3: Immutable Ledger Engine
 
-Status: `Ready For Test`
+Status: `Completed`
 
 Goal: implement the core service for posting immutable inventory ledger events.
 
@@ -332,14 +332,15 @@ Test evidence:
   - API build passed before and after applying the migration.
   - Prisma migration applied successfully to local PostgreSQL: `20260505090000_ledger_events_immutable`.
   - Database reported in sync after migration application.
+  - Developer browser-console testing confirmed authenticated `GET /api/auth/me`, successful ledger posting, idempotent duplicate post behavior, movement read visibility, reversal posting, and idempotent duplicate reversal behavior.
 - Issues found:
   - Prisma Client generation failed after migration application with Windows `EPERM` while renaming `node_modules\.prisma\client\query_engine-windows.dll.node`. Multiple Windows `node.exe` processes were active, so no process was killed automatically. No Prisma schema shape changed in Phase 3, and the API build still passed using the existing generated client.
 
 User sign-off:
 
-- Tested by:
-- Date:
-- Approval:
+- Tested by: Developer
+- Date: 2026-05-05
+- Approval: Approved by developer.
 
 ## Phase 4: Stock On Hand and Moving Average Costing
 
