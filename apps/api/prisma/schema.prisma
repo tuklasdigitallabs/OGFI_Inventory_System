@@ -84,6 +84,13 @@ enum CountStatus {
   REJECTED
 }
 
+enum StockCountType {
+  OPENING
+  EOD
+  CYCLE
+  SPOT
+}
+
 enum ReportStatus {
   QUEUED
   PROCESSING
@@ -112,6 +119,14 @@ enum SyncEventStatus {
   REJECTED
 }
 
+enum PriceStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  ARCHIVED
+}
+
 enum ReasonCodeType {
   WASTAGE
   ADJUSTMENT
@@ -120,20 +135,34 @@ enum ReasonCodeType {
 }
 
 model User {
-  id                String               @id @default(uuid()) @db.Uuid
-  email             String               @unique
-  username          String               @unique
-  passwordHash      String
-  fullName          String
-  active            Boolean              @default(true)
-  roleId            String               @db.Uuid
-  role              Role                 @relation(fields: [roleId], references: [id])
-  locationAccess    UserLocationAccess[]
-  auditLogs         AuditLog[]
-  createdLedger     LedgerEvent[]        @relation("LedgerCreatedBy")
-  approvedLedger    LedgerEvent[]        @relation("LedgerApprovedBy")
-  createdAt         DateTime             @default(now())
-  updatedAt         DateTime             @updatedAt
+  id                                     String                   @id @default(uuid()) @db.Uuid
+  email                                  String                   @unique
+  username                               String                   @unique
+  passwordHash                           String
+  fullName                               String
+  active                                 Boolean                  @default(true)
+  roleId                                 String                   @db.Uuid
+  role                                   Role                     @relation(fields: [roleId], references: [id])
+  locationAccess                         UserLocationAccess[]
+  auditLogs                              AuditLog[]
+  createdLedger                          LedgerEvent[]            @relation("LedgerCreatedBy")
+  approvedLedger                         LedgerEvent[]            @relation("LedgerApprovedBy")
+  requestedAdjustments                   AdjustmentRequest[]      @relation("AdjustmentRequestedBy")
+  approvedAdjustments                    AdjustmentRequest[]      @relation("AdjustmentApprovedBy")
+  rejectedAdjustments                    AdjustmentRequest[]      @relation("AdjustmentRejectedBy")
+  costOverriddenPurchaseOrderLines       PurchaseOrderLine[]      @relation("PurchaseOrderLineCostOverriddenBy")
+  costOverrideApprovedPurchaseOrderLines PurchaseOrderLine[]      @relation("PurchaseOrderLineCostOverrideApprovedBy")
+  observedRecipeYields                   RecipeYieldObservation[] @relation("RecipeYieldObservedBy")
+  approvedRecipeYields                   RecipeYieldObservation[] @relation("RecipeYieldApprovedBy")
+  yieldOverriddenRecipes                 Recipe[]                 @relation("RecipeYieldOverriddenBy")
+  yieldOverrideApprovedRecipes           Recipe[]                 @relation("RecipeYieldOverrideApprovedBy")
+  wastageOverriddenRecipes               Recipe[]                 @relation("RecipeWastageOverriddenBy")
+  wastageOverrideApprovedRecipes         Recipe[]                 @relation("RecipeWastageOverrideApprovedBy")
+  createdMenuPrices                      MenuPrice[]              @relation("MenuPriceCreatedBy")
+  approvedMenuPrices                     MenuPrice[]              @relation("MenuPriceApprovedBy")
+  syncBatches                            SyncBatch[]              @relation("SyncBatchSubmittedBy")
+  createdAt                              DateTime                 @default(now())
+  updatedAt                              DateTime                 @updatedAt
 
   @@index([roleId])
   @@map("users")
@@ -175,24 +204,27 @@ model RolePermission {
 }
 
 model Location {
-  id             String               @id @default(uuid()) @db.Uuid
-  code           String               @unique
-  name           String
-  type           LocationType
-  active         Boolean              @default(true)
-  userAccess     UserLocationAccess[]
-  purchaseOrders PurchaseOrder[]
-  receivings     Receiving[]
-  ledgerEvents   LedgerEvent[]
-  stockCounts    StockCount[]
-  wastage        Wastage[]
-  issues         IssueToOps[]
-  salesBatches   SalesBatch[]
-  syncBatches    SyncBatch[]
-  sourceTransfers Transfer[]          @relation("TransferSourceLocation")
-  targetTransfers Transfer[]          @relation("TransferTargetLocation")
-  createdAt      DateTime             @default(now())
-  updatedAt      DateTime             @updatedAt
+  id              String               @id @default(uuid()) @db.Uuid
+  code            String               @unique
+  name            String
+  type            LocationType
+  active          Boolean              @default(true)
+  userAccess      UserLocationAccess[]
+  purchaseOrders  PurchaseOrder[]
+  receivings      Receiving[]
+  ledgerEvents    LedgerEvent[]
+  adjustments     AdjustmentRequest[]
+  stockCounts     StockCount[]
+  wastage         Wastage[]
+  issues          IssueToOps[]
+  salesBatches    SalesBatch[]
+  syncBatches     SyncBatch[]
+  syncDevices     SyncDevice[]
+  sourceTransfers Transfer[]           @relation("TransferSourceLocation")
+  targetTransfers Transfer[]           @relation("TransferTargetLocation")
+  menuPrices      MenuPrice[]
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
 
   @@index([type, active])
   @@map("locations")
@@ -212,17 +244,19 @@ model UserLocationAccess {
 }
 
 model Uom {
-  id                  String          @id @default(uuid()) @db.Uuid
-  code                String          @unique
+  id                  String              @id @default(uuid()) @db.Uuid
+  code                String              @unique
   name                String
-  active              Boolean         @default(true)
-  items               Item[]
-  conversionsFrom     UomConversion[] @relation("ConversionFromUom")
-  conversionsTo       UomConversion[] @relation("ConversionToUom")
+  active              Boolean             @default(true)
+  items               Item[]              @relation("ItemBaseUom")
+  looseWholeItems     Item[]              @relation("ItemLooseWholeUom")
+  looseRemainderItems Item[]              @relation("ItemLooseRemainderUom")
+  conversionsFrom     UomConversion[]     @relation("ConversionFromUom")
+  conversionsTo       UomConversion[]     @relation("ConversionToUom")
   purchaseOrderLines  PurchaseOrderLine[]
   recipeLines         RecipeLine[]
-  createdAt           DateTime        @default(now())
-  updatedAt           DateTime        @updatedAt
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
 
   @@map("uoms")
 }
@@ -252,29 +286,37 @@ model Category {
 }
 
 model Item {
-  id                 String              @id @default(uuid()) @db.Uuid
-  sku                String              @unique
-  name               String
-  itemType           ItemType
-  categoryId         String?             @db.Uuid
-  baseUomId          String              @db.Uuid
-  lowStockThreshold  Decimal?            @db.Decimal(18, 6)
-  active             Boolean             @default(true)
-  category           Category?           @relation(fields: [categoryId], references: [id])
-  baseUom            Uom                 @relation(fields: [baseUomId], references: [id])
-  supplierItems      SupplierItem[]
-  purchaseOrderLines PurchaseOrderLine[]
-  receivingLines     ReceivingLine[]
-  transferLines      TransferLine[]
-  ledgerEvents       LedgerEvent[]
-  stockCountLines    StockCountLine[]
-  wastageLines       WastageLine[]
-  issueLines         IssueToOpsLine[]
-  recipeOutputs      Recipe[]            @relation("RecipeOutputItem")
-  recipeIngredients  RecipeLine[]         @relation("RecipeIngredientItem")
-  salesBatchLines    SalesBatchLine[]
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
+  id                  String              @id @default(uuid()) @db.Uuid
+  sku                 String              @unique
+  name                String
+  itemType            ItemType
+  categoryId          String?             @db.Uuid
+  baseUomId           String              @db.Uuid
+  lowStockThreshold   Decimal?            @db.Decimal(18, 6)
+  looseCountEnabled   Boolean             @default(false)
+  looseWholeUomId     String?             @db.Uuid
+  looseRemainderUomId String?             @db.Uuid
+  looseWholeUnitQty   Decimal?            @db.Decimal(18, 6)
+  active              Boolean             @default(true)
+  category            Category?           @relation(fields: [categoryId], references: [id])
+  baseUom             Uom                 @relation("ItemBaseUom", fields: [baseUomId], references: [id])
+  looseWholeUom       Uom?                @relation("ItemLooseWholeUom", fields: [looseWholeUomId], references: [id])
+  looseRemainderUom   Uom?                @relation("ItemLooseRemainderUom", fields: [looseRemainderUomId], references: [id])
+  supplierItems       SupplierItem[]
+  purchaseOrderLines  PurchaseOrderLine[]
+  receivingLines      ReceivingLine[]
+  transferLines       TransferLine[]
+  ledgerEvents        LedgerEvent[]
+  adjustmentRequests  AdjustmentRequest[]
+  stockCountLines     StockCountLine[]
+  wastageLines        WastageLine[]
+  issueLines          IssueToOpsLine[]
+  recipeOutputs       Recipe[]            @relation("RecipeOutputItem")
+  recipeIngredients   RecipeLine[]        @relation("RecipeIngredientItem")
+  menuPrices          MenuPrice[]         @relation("MenuPriceOutputItem")
+  salesBatchLines     SalesBatchLine[]
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
 
   @@index([categoryId])
   @@index([baseUomId])
@@ -283,18 +325,18 @@ model Item {
 }
 
 model Supplier {
-  id                 String              @id @default(uuid()) @db.Uuid
-  name               String
-  contactName        String?
-  email              String?
-  phone              String?
-  paymentTerms       String?
-  active             Boolean             @default(true)
-  supplierItems      SupplierItem[]
-  purchaseOrders     PurchaseOrder[]
-  receivings         Receiving[]
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
+  id             String          @id @default(uuid()) @db.Uuid
+  name           String
+  contactName    String?
+  email          String?
+  phone          String?
+  paymentTerms   String?
+  active         Boolean         @default(true)
+  supplierItems  SupplierItem[]
+  purchaseOrders PurchaseOrder[]
+  receivings     Receiving[]
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 
   @@index([active])
   @@map("suppliers")
@@ -317,55 +359,130 @@ model SupplierItem {
 }
 
 model Recipe {
-  id             String       @id @default(uuid()) @db.Uuid
-  outputItemId   String       @db.Uuid
-  version        Int          @default(1)
-  servingQty     Decimal      @db.Decimal(18, 6)
-  yieldPercent   Decimal      @default(100) @db.Decimal(5, 2)
-  wastageFactor  Decimal      @default(0) @db.Decimal(5, 2)
-  active         Boolean      @default(true)
-  outputItem     Item         @relation("RecipeOutputItem", fields: [outputItemId], references: [id])
-  lines          RecipeLine[]
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  id                          String                   @id @default(uuid()) @db.Uuid
+  outputItemId                String                   @db.Uuid
+  version                     Int                      @default(1)
+  servingQty                  Decimal                  @db.Decimal(18, 6)
+  yieldPercent                Decimal                  @default(100) @db.Decimal(5, 2)
+  wastageFactor               Decimal                  @default(0) @db.Decimal(5, 2)
+  yieldOverrideReason         String?
+  yieldOverriddenById         String?                  @db.Uuid
+  yieldOverriddenAt           DateTime?
+  yieldOverrideApprovedById   String?                  @db.Uuid
+  yieldOverrideApprovedAt     DateTime?
+  wastageOverrideReason       String?
+  wastageOverriddenById       String?                  @db.Uuid
+  wastageOverriddenAt         DateTime?
+  wastageOverrideApprovedById String?                  @db.Uuid
+  wastageOverrideApprovedAt   DateTime?
+  active                      Boolean                  @default(true)
+  outputItem                  Item                     @relation("RecipeOutputItem", fields: [outputItemId], references: [id])
+  lines                       RecipeLine[]
+  yieldObservations           RecipeYieldObservation[]
+  menuPrices                  MenuPrice[]
+  yieldOverriddenBy           User?                    @relation("RecipeYieldOverriddenBy", fields: [yieldOverriddenById], references: [id])
+  yieldOverrideApprovedBy     User?                    @relation("RecipeYieldOverrideApprovedBy", fields: [yieldOverrideApprovedById], references: [id])
+  wastageOverriddenBy         User?                    @relation("RecipeWastageOverriddenBy", fields: [wastageOverriddenById], references: [id])
+  wastageOverrideApprovedBy   User?                    @relation("RecipeWastageOverrideApprovedBy", fields: [wastageOverrideApprovedById], references: [id])
+  createdAt                   DateTime                 @default(now())
+  updatedAt                   DateTime                 @updatedAt
 
   @@unique([outputItemId, version])
   @@index([active])
+  @@index([yieldOverriddenById])
+  @@index([yieldOverrideApprovedById])
+  @@index([wastageOverriddenById])
+  @@index([wastageOverrideApprovedById])
   @@map("recipes")
 }
 
 model RecipeLine {
-  id           String   @id @default(uuid()) @db.Uuid
-  recipeId     String   @db.Uuid
-  ingredientId String   @db.Uuid
-  qty           Decimal  @db.Decimal(18, 6)
-  uomId         String   @db.Uuid
-  recipe       Recipe   @relation(fields: [recipeId], references: [id], onDelete: Cascade)
-  ingredient   Item     @relation("RecipeIngredientItem", fields: [ingredientId], references: [id])
-  uom          Uom      @relation(fields: [uomId], references: [id])
+  id           String  @id @default(uuid()) @db.Uuid
+  recipeId     String  @db.Uuid
+  ingredientId String  @db.Uuid
+  qty          Decimal @db.Decimal(18, 6)
+  uomId        String  @db.Uuid
+  recipe       Recipe  @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  ingredient   Item    @relation("RecipeIngredientItem", fields: [ingredientId], references: [id])
+  uom          Uom     @relation(fields: [uomId], references: [id])
 
   @@index([ingredientId])
   @@map("recipe_lines")
 }
 
+model RecipeYieldObservation {
+  id                   String    @id @default(uuid()) @db.Uuid
+  recipeId             String    @db.Uuid
+  expectedOutputQty    Decimal   @db.Decimal(18, 6)
+  actualOutputQty      Decimal   @db.Decimal(18, 6)
+  computedYieldPercent Decimal   @db.Decimal(5, 2)
+  notes                String?
+  observedById         String    @db.Uuid
+  approvedById         String?   @db.Uuid
+  approvedAt           DateTime?
+  recipe               Recipe    @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  observedBy           User      @relation("RecipeYieldObservedBy", fields: [observedById], references: [id])
+  approvedBy           User?     @relation("RecipeYieldApprovedBy", fields: [approvedById], references: [id])
+  createdAt            DateTime  @default(now())
+
+  @@index([recipeId, createdAt])
+  @@index([observedById])
+  @@index([approvedById])
+  @@map("recipe_yield_observations")
+}
+
+model MenuPrice {
+  id                       String      @id @default(uuid()) @db.Uuid
+  recipeId                 String      @db.Uuid
+  outputItemId             String      @db.Uuid
+  locationId               String?     @db.Uuid
+  channel                  String      @default("BASE")
+  sellingPrice             Decimal     @db.Decimal(18, 6)
+  targetFoodCostPercent    Decimal?    @db.Decimal(5, 2)
+  targetGrossMarginPercent Decimal?    @db.Decimal(5, 2)
+  effectiveDate            DateTime
+  effectiveEndDate         DateTime?
+  status                   PriceStatus @default(DRAFT)
+  notes                    String?
+  active                   Boolean     @default(false)
+  createdById              String?     @db.Uuid
+  approvedById             String?     @db.Uuid
+  approvedAt               DateTime?
+  recipe                   Recipe      @relation(fields: [recipeId], references: [id])
+  outputItem               Item        @relation("MenuPriceOutputItem", fields: [outputItemId], references: [id])
+  location                 Location?   @relation(fields: [locationId], references: [id])
+  createdBy                User?       @relation("MenuPriceCreatedBy", fields: [createdById], references: [id])
+  approvedBy               User?       @relation("MenuPriceApprovedBy", fields: [approvedById], references: [id])
+  createdAt                DateTime    @default(now())
+  updatedAt                DateTime    @updatedAt
+
+  @@index([recipeId])
+  @@index([outputItemId])
+  @@index([locationId])
+  @@index([status, active])
+  @@index([effectiveDate])
+  @@index([effectiveEndDate])
+  @@map("menu_prices")
+}
+
 model PurchaseOrder {
-  id             String              @id @default(uuid()) @db.Uuid
-  poNumber       String              @unique
-  supplierId     String              @db.Uuid
-  locationId     String              @db.Uuid
-  status         DocumentStatus      @default(DRAFT)
-  expectedDate   DateTime?
-  remarks        String?
-  supplier       Supplier            @relation(fields: [supplierId], references: [id])
-  location       Location            @relation(fields: [locationId], references: [id])
-  lines          PurchaseOrderLine[]
-  receivings     Receiving[]
-  createdById    String?             @db.Uuid
-  approvedById   String?             @db.Uuid
-  submittedAt    DateTime?
-  approvedAt     DateTime?
-  createdAt      DateTime            @default(now())
-  updatedAt      DateTime            @updatedAt
+  id           String              @id @default(uuid()) @db.Uuid
+  poNumber     String              @unique
+  supplierId   String              @db.Uuid
+  locationId   String              @db.Uuid
+  status       DocumentStatus      @default(DRAFT)
+  expectedDate DateTime?
+  remarks      String?
+  supplier     Supplier            @relation(fields: [supplierId], references: [id])
+  location     Location            @relation(fields: [locationId], references: [id])
+  lines        PurchaseOrderLine[]
+  receivings   Receiving[]
+  createdById  String?             @db.Uuid
+  approvedById String?             @db.Uuid
+  submittedAt  DateTime?
+  approvedAt   DateTime?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
 
   @@index([supplierId])
   @@index([locationId, status])
@@ -373,24 +490,34 @@ model PurchaseOrder {
 }
 
 model PurchaseOrderLine {
-  id              String        @id @default(uuid()) @db.Uuid
-  purchaseOrderId String        @db.Uuid
-  itemId          String        @db.Uuid
-  qty             Decimal       @db.Decimal(18, 6)
-  uomId           String        @db.Uuid
-  unitCost        Decimal       @db.Decimal(18, 6)
-  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
-  item            Item          @relation(fields: [itemId], references: [id])
-  uom             Uom           @relation(fields: [uomId], references: [id])
+  id                       String        @id @default(uuid()) @db.Uuid
+  purchaseOrderId          String        @db.Uuid
+  itemId                   String        @db.Uuid
+  qty                      Decimal       @db.Decimal(18, 6)
+  uomId                    String        @db.Uuid
+  unitCost                 Decimal       @db.Decimal(18, 6)
+  defaultUnitCost          Decimal?      @db.Decimal(18, 6)
+  costOverrideReason       String?
+  costOverriddenById       String?       @db.Uuid
+  costOverriddenAt         DateTime?
+  costOverrideApprovedById String?       @db.Uuid
+  costOverrideApprovedAt   DateTime?
+  purchaseOrder            PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  item                     Item          @relation(fields: [itemId], references: [id])
+  uom                      Uom           @relation(fields: [uomId], references: [id])
+  costOverriddenBy         User?         @relation("PurchaseOrderLineCostOverriddenBy", fields: [costOverriddenById], references: [id])
+  costOverrideApprovedBy   User?         @relation("PurchaseOrderLineCostOverrideApprovedBy", fields: [costOverrideApprovedById], references: [id])
 
   @@index([itemId])
+  @@index([costOverriddenById])
+  @@index([costOverrideApprovedById])
   @@map("purchase_order_lines")
 }
 
 model Receiving {
-  id              String          @id @default(uuid()) @db.Uuid
-  receivingNumber String          @unique
-  purchaseOrderId String?         @db.Uuid
+  id               String          @id @default(uuid()) @db.Uuid
+  receivingNumber  String          @unique
+  purchaseOrderId  String?         @db.Uuid
   supplierId       String          @db.Uuid
   locationId       String          @db.Uuid
   status           DocumentStatus  @default(POSTED)
@@ -412,33 +539,36 @@ model Receiving {
 }
 
 model ReceivingLine {
-  id            String    @id @default(uuid()) @db.Uuid
-  receivingId   String    @db.Uuid
-  itemId        String    @db.Uuid
-  acceptedQty   Decimal   @db.Decimal(18, 6)
-  rejectedQty   Decimal   @default(0) @db.Decimal(18, 6)
-  unitCost      Decimal   @db.Decimal(18, 6)
-  receiving     Receiving @relation(fields: [receivingId], references: [id], onDelete: Cascade)
-  item          Item      @relation(fields: [itemId], references: [id])
+  id          String    @id @default(uuid()) @db.Uuid
+  receivingId String    @db.Uuid
+  itemId      String    @db.Uuid
+  acceptedQty Decimal   @db.Decimal(18, 6)
+  rejectedQty Decimal   @default(0) @db.Decimal(18, 6)
+  unitCost    Decimal   @db.Decimal(18, 6)
+  remarks     String?
+  receiving   Receiving @relation(fields: [receivingId], references: [id], onDelete: Cascade)
+  item        Item      @relation(fields: [itemId], references: [id])
 
   @@index([itemId])
   @@map("receiving_lines")
 }
 
 model Transfer {
-  id               String          @id @default(uuid()) @db.Uuid
-  transferNumber   String          @unique
-  sourceLocationId String          @db.Uuid
-  targetLocationId String          @db.Uuid
-  status           TransferStatus  @default(DRAFT)
-  neededDate       DateTime?
-  remarks          String?
-  varianceNotes    String?
-  sourceLocation   Location        @relation("TransferSourceLocation", fields: [sourceLocationId], references: [id])
-  targetLocation   Location        @relation("TransferTargetLocation", fields: [targetLocationId], references: [id])
-  lines            TransferLine[]
-  createdAt        DateTime        @default(now())
-  updatedAt        DateTime        @updatedAt
+  id                       String         @id @default(uuid()) @db.Uuid
+  transferNumber           String         @unique
+  sourceLocationId         String         @db.Uuid
+  targetLocationId         String         @db.Uuid
+  status                   TransferStatus @default(DRAFT)
+  neededDate               DateTime?
+  remarks                  String?
+  varianceNotes            String?
+  requiresLowStockApproval Boolean        @default(false)
+  lowStockApprovalReason   String?
+  sourceLocation           Location       @relation("TransferSourceLocation", fields: [sourceLocationId], references: [id])
+  targetLocation           Location       @relation("TransferTargetLocation", fields: [targetLocationId], references: [id])
+  lines                    TransferLine[]
+  createdAt                DateTime       @default(now())
+  updatedAt                DateTime       @updatedAt
 
   @@index([sourceLocationId, status])
   @@index([targetLocationId, status])
@@ -446,44 +576,48 @@ model Transfer {
 }
 
 model TransferLine {
-  id           String   @id @default(uuid()) @db.Uuid
-  transferId   String   @db.Uuid
-  itemId       String   @db.Uuid
-  requestedQty Decimal  @db.Decimal(18, 6)
-  pickedQty    Decimal? @db.Decimal(18, 6)
-  receivedQty  Decimal? @db.Decimal(18, 6)
-  unitCost     Decimal? @db.Decimal(18, 6)
-  transfer     Transfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
-  item         Item     @relation(fields: [itemId], references: [id])
+  id                             String   @id @default(uuid()) @db.Uuid
+  transferId                     String   @db.Uuid
+  itemId                         String   @db.Uuid
+  requestedQty                   Decimal  @db.Decimal(18, 6)
+  pickedQty                      Decimal? @db.Decimal(18, 6)
+  receivedQty                    Decimal? @db.Decimal(18, 6)
+  unitCost                       Decimal? @db.Decimal(18, 6)
+  sourceQtyAvailableAtRequest    Decimal? @db.Decimal(18, 6)
+  sourceQtyRemainingAfterRequest Decimal? @db.Decimal(18, 6)
+  sourceLowStockThreshold        Decimal? @db.Decimal(18, 6)
+  sourceLowStockAfterRequest     Boolean  @default(false)
+  transfer                       Transfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  item                           Item     @relation(fields: [itemId], references: [id])
 
   @@index([itemId])
   @@map("transfer_lines")
 }
 
 model LedgerEvent {
-  id             String          @id @default(uuid()) @db.Uuid
-  uuid           String          @unique @db.Uuid
-  locationId     String          @db.Uuid
-  itemId         String          @db.Uuid
+  id              String          @id @default(uuid()) @db.Uuid
+  uuid            String          @unique @db.Uuid
+  locationId      String          @db.Uuid
+  itemId          String          @db.Uuid
   transactionType TransactionType
-  qtyIn          Decimal         @default(0) @db.Decimal(18, 6)
-  qtyOut         Decimal         @default(0) @db.Decimal(18, 6)
-  unitCostAtTime Decimal         @db.Decimal(18, 6)
-  extendedCost   Decimal         @db.Decimal(18, 6)
-  referenceType  ReferenceType
-  referenceId    String          @db.Uuid
-  businessDate   DateTime
-  createdById    String          @db.Uuid
-  approvedById   String?         @db.Uuid
-  reversalOfId   String?         @db.Uuid
-  metadata       Json?
-  location       Location        @relation(fields: [locationId], references: [id])
-  item           Item            @relation(fields: [itemId], references: [id])
-  createdBy      User            @relation("LedgerCreatedBy", fields: [createdById], references: [id])
-  approvedBy     User?           @relation("LedgerApprovedBy", fields: [approvedById], references: [id])
-  reversalOf     LedgerEvent?    @relation("LedgerReversal", fields: [reversalOfId], references: [id])
-  reversals      LedgerEvent[]   @relation("LedgerReversal")
-  createdAt      DateTime        @default(now())
+  qtyIn           Decimal         @default(0) @db.Decimal(18, 6)
+  qtyOut          Decimal         @default(0) @db.Decimal(18, 6)
+  unitCostAtTime  Decimal         @db.Decimal(18, 6)
+  extendedCost    Decimal         @db.Decimal(18, 6)
+  referenceType   ReferenceType
+  referenceId     String          @db.Uuid
+  businessDate    DateTime
+  createdById     String          @db.Uuid
+  approvedById    String?         @db.Uuid
+  reversalOfId    String?         @db.Uuid
+  metadata        Json?
+  location        Location        @relation(fields: [locationId], references: [id])
+  item            Item            @relation(fields: [itemId], references: [id])
+  createdBy       User            @relation("LedgerCreatedBy", fields: [createdById], references: [id])
+  approvedBy      User?           @relation("LedgerApprovedBy", fields: [approvedById], references: [id])
+  reversalOf      LedgerEvent?    @relation("LedgerReversal", fields: [reversalOfId], references: [id])
+  reversals       LedgerEvent[]   @relation("LedgerReversal")
+  createdAt       DateTime        @default(now())
 
   @@index([locationId, itemId, businessDate])
   @@index([businessDate])
@@ -492,10 +626,49 @@ model LedgerEvent {
   @@map("ledger_events")
 }
 
+model AdjustmentRequest {
+  id             String         @id @default(uuid()) @db.Uuid
+  requestNumber  String         @unique
+  locationId     String         @db.Uuid
+  itemId         String         @db.Uuid
+  qtyIn          Decimal        @default(0) @db.Decimal(18, 6)
+  qtyOut         Decimal        @default(0) @db.Decimal(18, 6)
+  unitCostAtTime Decimal        @db.Decimal(18, 6)
+  status         DocumentStatus @default(PENDING_APPROVAL)
+  businessDate   DateTime
+  reasonCodeId   String         @db.Uuid
+  remarks        String?
+  requestedById  String         @db.Uuid
+  approvedById   String?        @db.Uuid
+  approvedAt     DateTime?
+  rejectedById   String?        @db.Uuid
+  rejectedAt     DateTime?
+  rejectionReason String?
+  ledgerEventId  String?        @db.Uuid
+  location       Location       @relation(fields: [locationId], references: [id])
+  item           Item           @relation(fields: [itemId], references: [id])
+  reasonCode     ReasonCode     @relation(fields: [reasonCodeId], references: [id])
+  requestedBy    User           @relation("AdjustmentRequestedBy", fields: [requestedById], references: [id])
+  approvedBy     User?          @relation("AdjustmentApprovedBy", fields: [approvedById], references: [id])
+  rejectedBy     User?          @relation("AdjustmentRejectedBy", fields: [rejectedById], references: [id])
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([locationId, status])
+  @@index([itemId])
+  @@index([reasonCodeId])
+  @@index([requestedById])
+  @@index([approvedById])
+  @@index([rejectedById])
+  @@index([businessDate])
+  @@map("adjustment_requests")
+}
+
 model StockCount {
   id           String           @id @default(uuid()) @db.Uuid
   countNumber  String           @unique
   locationId   String           @db.Uuid
+  countType    StockCountType   @default(EOD)
   status       CountStatus      @default(DRAFT)
   businessDate DateTime
   submittedAt  DateTime?
@@ -525,34 +698,35 @@ model StockCountLine {
 }
 
 model ReasonCode {
-  id          String         @id @default(uuid()) @db.Uuid
-  code        String
-  name        String
-  type        ReasonCodeType
-  active      Boolean        @default(true)
-  wastage     Wastage[]
-  auditLogs   AuditLog[]
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+  id        String         @id @default(uuid()) @db.Uuid
+  code      String
+  name      String
+  type      ReasonCodeType
+  active    Boolean        @default(true)
+  wastage   Wastage[]
+  adjustments AdjustmentRequest[]
+  auditLogs AuditLog[]
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
 
   @@unique([type, code])
   @@map("reason_codes")
 }
 
 model Wastage {
-  id           String        @id @default(uuid()) @db.Uuid
-  wastageNumber String       @unique
-  locationId   String        @db.Uuid
-  reasonCodeId String        @db.Uuid
-  status       CountStatus   @default(DRAFT)
-  businessDate DateTime
-  remarks      String?
-  photoUrl     String?
-  location     Location      @relation(fields: [locationId], references: [id])
-  reasonCode   ReasonCode    @relation(fields: [reasonCodeId], references: [id])
-  lines        WastageLine[]
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
+  id            String        @id @default(uuid()) @db.Uuid
+  wastageNumber String        @unique
+  locationId    String        @db.Uuid
+  reasonCodeId  String        @db.Uuid
+  status        CountStatus   @default(DRAFT)
+  businessDate  DateTime
+  remarks       String?
+  photoUrl      String?
+  location      Location      @relation(fields: [locationId], references: [id])
+  reasonCode    ReasonCode    @relation(fields: [reasonCodeId], references: [id])
+  lines         WastageLine[]
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
 
   @@index([locationId, businessDate])
   @@index([reasonCodeId])
@@ -560,13 +734,13 @@ model Wastage {
 }
 
 model WastageLine {
-  id        String  @id @default(uuid()) @db.Uuid
-  wastageId String  @db.Uuid
-  itemId    String  @db.Uuid
-  qty       Decimal @db.Decimal(18, 6)
+  id        String   @id @default(uuid()) @db.Uuid
+  wastageId String   @db.Uuid
+  itemId    String   @db.Uuid
+  qty       Decimal  @db.Decimal(18, 6)
   unitCost  Decimal? @db.Decimal(18, 6)
-  wastage   Wastage @relation(fields: [wastageId], references: [id], onDelete: Cascade)
-  item      Item    @relation(fields: [itemId], references: [id])
+  wastage   Wastage  @relation(fields: [wastageId], references: [id], onDelete: Cascade)
+  item      Item     @relation(fields: [itemId], references: [id])
 
   @@index([itemId])
   @@map("wastage_lines")
@@ -588,29 +762,29 @@ model IssueToOps {
 }
 
 model IssueToOpsLine {
-  id          String     @id @default(uuid()) @db.Uuid
-  issueToOpsId String    @db.Uuid
-  itemId      String     @db.Uuid
-  qty         Decimal    @db.Decimal(18, 6)
-  unitCost    Decimal?   @db.Decimal(18, 6)
-  issueToOps  IssueToOps @relation(fields: [issueToOpsId], references: [id], onDelete: Cascade)
-  item        Item       @relation(fields: [itemId], references: [id])
+  id           String     @id @default(uuid()) @db.Uuid
+  issueToOpsId String     @db.Uuid
+  itemId       String     @db.Uuid
+  qty          Decimal    @db.Decimal(18, 6)
+  unitCost     Decimal?   @db.Decimal(18, 6)
+  issueToOps   IssueToOps @relation(fields: [issueToOpsId], references: [id], onDelete: Cascade)
+  item         Item       @relation(fields: [itemId], references: [id])
 
   @@index([itemId])
   @@map("issue_to_ops_lines")
 }
 
 model SalesBatch {
-  id           String           @id @default(uuid()) @db.Uuid
-  batchNumber  String           @unique
-  locationId   String           @db.Uuid
-  status       DocumentStatus   @default(DRAFT)
-  businessDate DateTime
+  id            String           @id @default(uuid()) @db.Uuid
+  batchNumber   String           @unique
+  locationId    String           @db.Uuid
+  status        DocumentStatus   @default(DRAFT)
+  businessDate  DateTime
   sourceFileUrl String?
-  location     Location         @relation(fields: [locationId], references: [id])
-  lines        SalesBatchLine[]
-  createdAt    DateTime         @default(now())
-  updatedAt    DateTime         @updatedAt
+  location      Location         @relation(fields: [locationId], references: [id])
+  lines         SalesBatchLine[]
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
 
   @@index([locationId, businessDate])
   @@map("sales_batches")
@@ -629,18 +803,18 @@ model SalesBatchLine {
 }
 
 model ReportRun {
-  id          String       @id @default(uuid()) @db.Uuid
-  reportKey   String
-  status      ReportStatus @default(QUEUED)
-  format      ReportFormat
-  parameters  Json
-  outputUrl   String?
-  error       String?
-  requestedById String?    @db.Uuid
-  startedAt   DateTime?
-  completedAt DateTime?
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  id            String       @id @default(uuid()) @db.Uuid
+  reportKey     String
+  status        ReportStatus @default(QUEUED)
+  format        ReportFormat
+  parameters    Json
+  outputUrl     String?
+  error         String?
+  requestedById String?      @db.Uuid
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
 
   @@index([reportKey, status])
   @@index([createdAt])
@@ -672,35 +846,64 @@ model AuditLog {
   @@map("audit_logs")
 }
 
+model SystemSetting {
+  id        String   @id @default(uuid()) @db.Uuid
+  key       String   @unique
+  value     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("system_settings")
+}
+
 model SyncBatch {
   id              String          @id @default(uuid()) @db.Uuid
   uuid            String          @unique @db.Uuid
   deviceId        String
   locationId      String          @db.Uuid
+  submittedById   String?         @db.Uuid
   status          SyncBatchStatus @default(RECEIVED)
   clientCreatedAt DateTime
   appVersion      String?
   error           String?
   location        Location        @relation(fields: [locationId], references: [id])
+  submittedBy     User?           @relation("SyncBatchSubmittedBy", fields: [submittedById], references: [id])
   events          SyncEvent[]
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 
   @@index([deviceId])
   @@index([locationId, status])
+  @@index([submittedById])
   @@map("sync_batches")
 }
 
+model SyncDevice {
+  id         String    @id @default(uuid()) @db.Uuid
+  deviceCode String    @unique
+  name       String
+  type       String?
+  locationId String?   @db.Uuid
+  active     Boolean   @default(true)
+  lastSeenAt DateTime?
+  location   Location? @relation(fields: [locationId], references: [id])
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([locationId, active])
+  @@map("sync_devices")
+}
+
 model SyncEvent {
-  id           String          @id @default(uuid()) @db.Uuid
-  uuid         String          @unique @db.Uuid
-  syncBatchId  String          @db.Uuid
-  eventType    TransactionType
-  payload      Json
-  status       SyncEventStatus @default(PENDING)
+  id              String          @id @default(uuid()) @db.Uuid
+  uuid            String          @unique @db.Uuid
+  syncBatchId     String          @db.Uuid
+  eventType       TransactionType
+  payload         Json
+  status          SyncEventStatus @default(PENDING)
   rejectionReason String?
-  processedAt  DateTime?
-  syncBatch    SyncBatch       @relation(fields: [syncBatchId], references: [id], onDelete: Cascade)
+  processedAt     DateTime?
+  syncBatch       SyncBatch       @relation(fields: [syncBatchId], references: [id], onDelete: Cascade)
 
   @@index([syncBatchId, status])
   @@index([eventType])

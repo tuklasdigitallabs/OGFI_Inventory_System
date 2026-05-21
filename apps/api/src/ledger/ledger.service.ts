@@ -4,17 +4,25 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
-} from '@nestjs/common';
+} from "@nestjs/common";
 import {
   LedgerEvent,
+  DocumentStatus,
   Prisma,
   ReferenceType,
   TransactionType,
-} from '@prisma/client';
-import { AuthenticatedUser } from '../auth/types';
-import { PrismaService } from '../prisma/prisma.service';
-import { PostLedgerEventDto } from './dto/post-ledger-event.dto';
-import { ReverseLedgerEventDto } from './dto/reverse-ledger-event.dto';
+  TransferStatus,
+} from "@prisma/client";
+import { randomUUID } from "crypto";
+import { AuthenticatedUser } from "../auth/types";
+import { CostingService, InventoryState } from "../costing/costing.service";
+import { PrismaService } from "../prisma/prisma.service";
+import {
+  CreateAdjustmentRequestDto,
+  RejectAdjustmentRequestDto,
+} from "./dto/adjustment-request.dto";
+import { PostLedgerEventDto } from "./dto/post-ledger-event.dto";
+import { ReverseLedgerEventDto } from "./dto/reverse-ledger-event.dto";
 
 interface RequestAuditMetadata {
   ipAddress?: string;
@@ -23,7 +31,7 @@ interface RequestAuditMetadata {
 
 type LedgerEventResponse = Omit<
   LedgerEvent,
-  'qtyIn' | 'qtyOut' | 'unitCostAtTime' | 'extendedCost' | 'metadata'
+  "qtyIn" | "qtyOut" | "unitCostAtTime" | "extendedCost" | "metadata"
 > & {
   qtyIn: string;
   qtyOut: string;
@@ -31,6 +39,20 @@ type LedgerEventResponse = Omit<
   extendedCost: string;
   metadata: Prisma.JsonValue | null;
 };
+
+type StockOnHandEvent = Prisma.LedgerEventGetPayload<{
+  include: {
+    item: {
+      include: {
+        baseUom: true;
+        category: true;
+        looseRemainderUom: true;
+        looseWholeUom: true;
+      };
+    };
+    location: true;
+  };
+}>;
 
 const INBOUND_TRANSACTION_TYPES = new Set<TransactionType>([
   TransactionType.RECEIVE,
@@ -51,17 +73,46 @@ const EITHER_DIRECTION_TRANSACTION_TYPES = new Set<TransactionType>([
 
 @Injectable()
 export class LedgerService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly costingService: CostingService,
+  ) {}
 
   async list(resource: string, query: Record<string, string> = {}) {
-    if (resource === 'inventory.movements') {
+    if (resource === "inventory.stock-on-hand") {
+      const events = await this.prisma.ledgerEvent.findMany({
+        where: {
+          locationId: query.locationId,
+          itemId: query.itemId,
+        },
+        include: {
+          item: {
+            include: {
+              baseUom: true,
+              category: true,
+              looseRemainderUom: true,
+              looseWholeUom: true,
+            },
+          },
+          location: true,
+        },
+        orderBy: [{ businessDate: "asc" }, { createdAt: "asc" }],
+      });
+
+      return {
+        resource,
+        data: await this.toStockOnHandResponse(events, query),
+      };
+    }
+
+    if (resource === "inventory.movements") {
       const events = await this.prisma.ledgerEvent.findMany({
         where: {
           locationId: query.locationId,
           itemId: query.itemId,
           transactionType: query.transactionType as TransactionType | undefined,
         },
-        orderBy: [{ businessDate: 'desc' }, { createdAt: 'desc' }],
+        orderBy: [{ businessDate: "desc" }, { createdAt: "desc" }],
         take: this.parseTake(query.take),
       });
 
@@ -71,13 +122,37 @@ export class LedgerService {
       };
     }
 
-    if (resource === 'ledger.events.detail') {
+    if (resource === "inventory.adjustment-requests") {
+      const requests = await this.prisma.adjustmentRequest.findMany({
+        where: {
+          locationId: query.locationId,
+          status: query.status as DocumentStatus | undefined,
+        },
+        include: {
+          item: { include: { baseUom: true } },
+          location: true,
+          reasonCode: true,
+          requestedBy: true,
+          approvedBy: true,
+          rejectedBy: true,
+        },
+        orderBy: [{ createdAt: "desc" }],
+        take: this.parseTake(query.take),
+      });
+
+      return {
+        resource,
+        data: requests.map((request) => this.toResponseJson(request)),
+      };
+    }
+
+    if (resource === "ledger.events.detail") {
       const event = await this.prisma.ledgerEvent.findUnique({
         where: { id: query.id },
       });
 
       if (!event) {
-        throw new NotFoundException('Ledger event not found.');
+        throw new NotFoundException("Ledger event not found.");
       }
 
       return this.toResponse(event);
@@ -85,7 +160,7 @@ export class LedgerService {
 
     return {
       resource,
-      status: 'deferred',
+      status: "deferred",
       query,
     };
   }
@@ -102,7 +177,7 @@ export class LedgerService {
 
       if (existing) {
         return {
-          status: 'already_posted',
+          status: "already_posted",
           idempotent: true,
           event: this.toResponse(existing),
         };
@@ -115,8 +190,6 @@ export class LedgerService {
         dto.qtyIn,
         dto.qtyOut,
       );
-      const unitCostAtTime = new Prisma.Decimal(dto.unitCostAtTime);
-      const extendedCost = quantities.movementQty.mul(unitCostAtTime);
 
       await this.validatePostTargets(
         tx,
@@ -126,6 +199,21 @@ export class LedgerService {
         dto.reasonCodeId,
       );
       await this.validateReference(tx, dto.referenceType, dto.referenceId);
+
+      const currentState = await this.getCurrentState(
+        tx,
+        dto.locationId,
+        dto.itemId,
+      );
+      this.enforceNegativeStockPolicy(quantities.qtyOut, currentState);
+
+      const unitCostAtTime = await this.resolveUnitCostAtTime(
+        tx,
+        dto,
+        quantities.qtyOut,
+        currentState,
+      );
+      const extendedCost = quantities.movementQty.mul(unitCostAtTime);
 
       const event = await tx.ledgerEvent.create({
         data: {
@@ -148,7 +236,7 @@ export class LedgerService {
 
       await this.recordAudit(
         tx,
-        'ledger.events.posted',
+        "ledger.events.posted",
         event,
         user,
         metadata,
@@ -156,10 +244,226 @@ export class LedgerService {
       );
 
       return {
-        status: 'posted',
+        status: "posted",
         idempotent: false,
         event: this.toResponse(event),
       };
+    });
+  }
+
+  async createAdjustmentRequest(
+    dto: CreateAdjustmentRequestDto,
+    user: AuthenticatedUser,
+    metadata: RequestAuditMetadata = {},
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      this.assertUserCanAccessLocation(user, dto.locationId);
+
+      const quantities = this.validateQuantities(
+        TransactionType.ADJUSTMENT,
+        dto.qtyIn,
+        dto.qtyOut,
+      );
+
+      await this.validatePostTargets(
+        tx,
+        dto.locationId,
+        dto.itemId,
+        undefined,
+        dto.reasonCodeId,
+      );
+      await this.validateAdjustmentReason(tx, dto.reasonCodeId);
+
+      const currentState = await this.getCurrentState(
+        tx,
+        dto.locationId,
+        dto.itemId,
+      );
+      this.enforceNegativeStockPolicy(quantities.qtyOut, currentState);
+
+      const unitCostAtTime = quantities.qtyOut.gt(0)
+        ? currentState.averageUnitCost
+        : new Prisma.Decimal(dto.unitCostAtTime);
+      const request = await tx.adjustmentRequest.create({
+        data: {
+          requestNumber: await this.nextAdjustmentRequestNumber(tx),
+          locationId: dto.locationId,
+          itemId: dto.itemId,
+          qtyIn: quantities.qtyIn,
+          qtyOut: quantities.qtyOut,
+          unitCostAtTime,
+          businessDate: new Date(dto.businessDate),
+          reasonCodeId: dto.reasonCodeId,
+          remarks: dto.remarks?.trim() || undefined,
+          requestedById: user.id,
+        },
+        include: {
+          item: { include: { baseUom: true } },
+          location: true,
+          reasonCode: true,
+          requestedBy: true,
+          approvedBy: true,
+          rejectedBy: true,
+        },
+      });
+
+      await this.recordAdjustmentAudit(
+        tx,
+        "adjustments.requested",
+        request,
+        user,
+        metadata,
+      );
+
+      return this.toResponseJson(request);
+    });
+  }
+
+  async approveAdjustmentRequest(
+    id: string,
+    user: AuthenticatedUser,
+    metadata: RequestAuditMetadata = {},
+  ) {
+    const request = await this.prisma.adjustmentRequest.findUnique({
+      where: { id },
+      include: {
+        item: { include: { baseUom: true } },
+        location: true,
+        reasonCode: true,
+        requestedBy: true,
+        approvedBy: true,
+        rejectedBy: true,
+      },
+    });
+
+    if (!request) {
+      throw new NotFoundException("Adjustment request not found.");
+    }
+
+    this.assertUserCanAccessLocation(user, request.locationId);
+
+    if (request.status !== DocumentStatus.PENDING_APPROVAL) {
+      throw new ConflictException(
+        "Only pending adjustment requests can be approved.",
+      );
+    }
+
+    const posted = await this.postEvent(
+      {
+        uuid: randomUUID(),
+        locationId: request.locationId,
+        itemId: request.itemId,
+        transactionType: TransactionType.ADJUSTMENT,
+        qtyIn: request.qtyIn.toNumber() > 0 ? request.qtyIn.toNumber() : undefined,
+        qtyOut:
+          request.qtyOut.toNumber() > 0 ? request.qtyOut.toNumber() : undefined,
+        unitCostAtTime: request.unitCostAtTime.toNumber(),
+        referenceType: ReferenceType.ADJUSTMENT,
+        referenceId: request.id,
+        businessDate: request.businessDate.toISOString(),
+        approvedById: user.id,
+        reasonCodeId: request.reasonCodeId,
+        metadata: {
+          adjustmentRequestNumber: request.requestNumber,
+          requestedById: request.requestedById,
+          remarks: request.remarks,
+        },
+      },
+      user,
+      metadata,
+    );
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const approved = await tx.adjustmentRequest.update({
+        where: { id },
+        data: {
+          status: DocumentStatus.POSTED,
+          approvedById: user.id,
+          approvedAt: new Date(),
+          ledgerEventId: posted.event.id,
+        },
+        include: {
+          item: { include: { baseUom: true } },
+          location: true,
+          reasonCode: true,
+          requestedBy: true,
+          approvedBy: true,
+          rejectedBy: true,
+        },
+      });
+
+      await this.recordAdjustmentAudit(
+        tx,
+        "adjustments.approved",
+        approved,
+        user,
+        metadata,
+      );
+
+      return approved;
+    });
+
+    return this.toResponseJson(updated);
+  }
+
+  async rejectAdjustmentRequest(
+    id: string,
+    dto: RejectAdjustmentRequestDto,
+    user: AuthenticatedUser,
+    metadata: RequestAuditMetadata = {},
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const request = await tx.adjustmentRequest.findUnique({
+        where: { id },
+        include: {
+          item: { include: { baseUom: true } },
+          location: true,
+          reasonCode: true,
+          requestedBy: true,
+          approvedBy: true,
+          rejectedBy: true,
+        },
+      });
+
+      if (!request) {
+        throw new NotFoundException("Adjustment request not found.");
+      }
+
+      this.assertUserCanAccessLocation(user, request.locationId);
+
+      if (request.status !== DocumentStatus.PENDING_APPROVAL) {
+        throw new ConflictException(
+          "Only pending adjustment requests can be rejected.",
+        );
+      }
+
+      const rejected = await tx.adjustmentRequest.update({
+        where: { id },
+        data: {
+          status: DocumentStatus.REJECTED,
+          rejectedById: user.id,
+          rejectedAt: new Date(),
+          rejectionReason: dto.reason.trim(),
+        },
+        include: {
+          item: { include: { baseUom: true } },
+          location: true,
+          reasonCode: true,
+          requestedBy: true,
+          approvedBy: true,
+          rejectedBy: true,
+        },
+      });
+
+      await this.recordAdjustmentAudit(
+        tx,
+        "adjustments.rejected",
+        rejected,
+        user,
+        metadata,
+      );
+
+      return this.toResponseJson(rejected);
     });
   }
 
@@ -176,7 +480,7 @@ export class LedgerService {
 
       if (existing) {
         return {
-          status: 'already_posted',
+          status: "already_posted",
           idempotent: true,
           event: this.toResponse(existing),
         };
@@ -188,15 +492,15 @@ export class LedgerService {
       });
 
       if (!original) {
-        throw new NotFoundException('Ledger event not found.');
+        throw new NotFoundException("Ledger event not found.");
       }
 
       if (original.reversalOfId) {
-        throw new BadRequestException('Reversal events cannot be reversed.');
+        throw new BadRequestException("Reversal events cannot be reversed.");
       }
 
       if (original.reversals.length > 0) {
-        throw new ConflictException('Ledger event has already been reversed.');
+        throw new ConflictException("Ledger event has already been reversed.");
       }
 
       this.assertUserCanAccessLocation(user, original.locationId);
@@ -212,6 +516,14 @@ export class LedgerService {
         dto.reasonCodeId,
       );
       await this.validateReference(tx, referenceType, referenceId);
+
+      const qtyOut = original.qtyIn;
+      const currentState = await this.getCurrentState(
+        tx,
+        original.locationId,
+        original.itemId,
+      );
+      this.enforceNegativeStockPolicy(qtyOut, currentState);
 
       const event = await tx.ledgerEvent.create({
         data: {
@@ -240,7 +552,7 @@ export class LedgerService {
 
       await this.recordAudit(
         tx,
-        'ledger.events.reversed',
+        "ledger.events.reversed",
         event,
         user,
         metadata,
@@ -252,11 +564,72 @@ export class LedgerService {
       );
 
       return {
-        status: 'posted',
+        status: "posted",
         idempotent: false,
         event: this.toResponse(event),
       };
     });
+  }
+
+  private async getCurrentState(
+    tx: Prisma.TransactionClient,
+    locationId: string,
+    itemId: string,
+  ) {
+    const events = await tx.ledgerEvent.findMany({
+      where: { locationId, itemId },
+      orderBy: [{ businessDate: "asc" }, { createdAt: "asc" }],
+    });
+
+    return this.costingService.calculateState(events);
+  }
+
+  private async resolveUnitCostAtTime(
+    tx: Prisma.TransactionClient,
+    dto: PostLedgerEventDto,
+    qtyOut: Prisma.Decimal,
+    currentState: InventoryState,
+  ) {
+    if (dto.transactionType === TransactionType.TRANSFER_IN) {
+      const dispatchedEvent = await tx.ledgerEvent.findFirst({
+        where: {
+          itemId: dto.itemId,
+          referenceType: ReferenceType.TRANSFER,
+          referenceId: dto.referenceId,
+          transactionType: TransactionType.TRANSFER_OUT,
+          qtyOut: { gt: 0 },
+        },
+        orderBy: [{ businessDate: "desc" }, { createdAt: "desc" }],
+      });
+
+      if (!dispatchedEvent) {
+        throw new BadRequestException(
+          "TRANSFER_IN requires a dispatched TRANSFER_OUT event for the same transfer and item.",
+        );
+      }
+
+      return dispatchedEvent.unitCostAtTime;
+    }
+
+    if (
+      qtyOut.gt(0) &&
+      this.costingService.shouldUseCurrentAverageCost(dto.transactionType)
+    ) {
+      return currentState.averageUnitCost;
+    }
+
+    return new Prisma.Decimal(dto.unitCostAtTime);
+  }
+
+  private enforceNegativeStockPolicy(
+    qtyOut: Prisma.Decimal,
+    currentState: InventoryState,
+  ) {
+    if (qtyOut.gt(0) && currentState.qtyOnHand.sub(qtyOut).lt(0)) {
+      throw new ConflictException(
+        "Posting this ledger event would create negative stock.",
+      );
+    }
   }
 
   private assertUserCanAccessLocation(
@@ -264,7 +637,7 @@ export class LedgerService {
     locationId: string,
   ) {
     if (!user.locationIds.includes(locationId)) {
-      throw new ForbiddenException('Location access denied.');
+      throw new ForbiddenException("Location access denied.");
     }
   }
 
@@ -280,7 +653,7 @@ export class LedgerService {
 
     if (hasQtyIn === hasQtyOut) {
       throw new BadRequestException(
-        'Exactly one of qtyIn or qtyOut must be greater than zero.',
+        "Exactly one of qtyIn or qtyOut must be greater than zero.",
       );
     }
 
@@ -344,20 +717,20 @@ export class LedgerService {
     ]);
 
     if (!location) {
-      throw new BadRequestException('Location does not exist or is inactive.');
+      throw new BadRequestException("Location does not exist or is inactive.");
     }
 
     if (!item) {
-      throw new BadRequestException('Item does not exist or is inactive.');
+      throw new BadRequestException("Item does not exist or is inactive.");
     }
 
     if (approvedById && !approver) {
-      throw new BadRequestException('Approver does not exist or is inactive.');
+      throw new BadRequestException("Approver does not exist or is inactive.");
     }
 
     if (reasonCodeId && !reasonCode) {
       throw new BadRequestException(
-        'Reason code does not exist or is inactive.',
+        "Reason code does not exist or is inactive.",
       );
     }
   }
@@ -423,10 +796,42 @@ export class LedgerService {
           select: { id: true },
         });
       case ReferenceType.ADJUSTMENT:
-        return Promise.resolve({ id: referenceId });
+        return tx.adjustmentRequest.findUnique({
+          where: { id: referenceId },
+          select: { id: true },
+        });
       default:
         return Promise.resolve(null);
     }
+  }
+
+  private async validateAdjustmentReason(
+    tx: Prisma.TransactionClient,
+    reasonCodeId: string,
+  ) {
+    const reasonCode = await tx.reasonCode.findFirst({
+      where: { id: reasonCodeId, active: true, type: "ADJUSTMENT" },
+      select: { id: true },
+    });
+
+    if (!reasonCode) {
+      throw new BadRequestException("Select an active adjustment reason.");
+    }
+  }
+
+  private async nextAdjustmentRequestNumber(tx: Prisma.TransactionClient) {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+
+    const end = new Date(start);
+    end.setDate(end.getDate() + 1);
+
+    const count = await tx.adjustmentRequest.count({
+      where: { createdAt: { gte: start, lt: end } },
+    });
+    const datePart = start.toISOString().slice(0, 10).replace(/-/g, "");
+
+    return `ADJ-${datePart}-${String(count + 1).padStart(4, "0")}`;
   }
 
   private async recordAudit(
@@ -441,9 +846,9 @@ export class LedgerService {
     await tx.auditLog.create({
       data: {
         userId: user.id,
-        module: 'ledger',
+        module: "ledger",
         action,
-        entityType: 'LedgerEvent',
+        entityType: "LedgerEvent",
         entityId: event.id,
         locationId: event.locationId,
         reasonCodeId,
@@ -457,6 +862,29 @@ export class LedgerService {
     });
   }
 
+  private async recordAdjustmentAudit(
+    tx: Prisma.TransactionClient,
+    action: string,
+    request: { id: string; locationId: string; reasonCodeId: string },
+    user: AuthenticatedUser,
+    metadata: RequestAuditMetadata,
+  ) {
+    await tx.auditLog.create({
+      data: {
+        userId: user.id,
+        module: "inventory.adjustments",
+        action,
+        entityType: "AdjustmentRequest",
+        entityId: request.id,
+        locationId: request.locationId,
+        reasonCodeId: request.reasonCodeId,
+        after: this.toResponseJson(request) as Prisma.InputJsonValue,
+        ipAddress: metadata.ipAddress,
+        userAgent: metadata.userAgent,
+      },
+    });
+  }
+
   private parseTake(rawTake?: string) {
     if (!rawTake) {
       return 100;
@@ -464,6 +892,289 @@ export class LedgerService {
 
     const take = Number(rawTake);
     return Number.isInteger(take) && take > 0 && take <= 500 ? take : 100;
+  }
+
+  private async toStockOnHandResponse(
+    events: StockOnHandEvent[],
+    query: Record<string, string>,
+  ) {
+    const groupedEvents = new Map<string, StockOnHandEvent[]>();
+
+    for (const event of events) {
+      const key = `${event.locationId}:${event.itemId}`;
+      const itemEvents = groupedEvents.get(key) ?? [];
+      itemEvents.push(event);
+      groupedEvents.set(key, itemEvents);
+    }
+
+    const rowMap = new Map<string, ReturnType<typeof this.stockRow>>();
+
+    for (const itemEvents of groupedEvents.values()) {
+      const firstEvent = itemEvents[0];
+      const lastEvent = itemEvents[itemEvents.length - 1];
+      const state = this.costingService.calculateState(itemEvents);
+
+      rowMap.set(
+        `${firstEvent.locationId}:${firstEvent.itemId}`,
+        this.stockRow({
+          averageUnitCost: state.averageUnitCost,
+          inventoryValue: state.inventoryValue,
+          item: firstEvent.item,
+          lastBusinessDate: lastEvent.businessDate,
+          lastMovementAt: lastEvent.createdAt,
+          location: firstEvent.location,
+          qtyOnHand: state.qtyOnHand,
+        }),
+      );
+    }
+
+    await this.applyTransferReservations(rowMap, query);
+
+    return [...rowMap.values()].sort((left, right) => {
+      const locationDiff = left.locationCode.localeCompare(right.locationCode);
+
+      if (locationDiff !== 0) {
+        return locationDiff;
+      }
+
+      return left.sku.localeCompare(right.sku);
+    });
+  }
+
+  private stockRow({
+    averageUnitCost,
+    inventoryValue,
+    item,
+    lastBusinessDate,
+    lastMovementAt,
+    location,
+    qtyOnHand,
+  }: {
+    averageUnitCost: Prisma.Decimal;
+    inventoryValue: Prisma.Decimal;
+    item: StockOnHandEvent["item"];
+    lastBusinessDate: Date;
+    lastMovementAt: Date;
+    location: StockOnHandEvent["location"];
+    qtyOnHand: Prisma.Decimal;
+  }) {
+    return {
+      locationId: location.id,
+      locationCode: location.code,
+      locationName: location.name,
+      itemId: item.id,
+      sku: item.sku,
+      itemName: item.name,
+      itemType: item.itemType,
+      categoryId: item.categoryId,
+      categoryName: item.category?.name ?? null,
+      baseUomCode: item.baseUom.code,
+      displayQty: this.formatStockQty(item, qtyOnHand),
+      displayAvailableQty: this.formatStockQty(item, qtyOnHand),
+      looseCountEnabled: item.looseCountEnabled,
+      looseRemainderUomCode: item.looseRemainderUom?.code ?? null,
+      looseWholeUnitQty: item.looseWholeUnitQty?.toString() ?? null,
+      looseWholeUomCode: item.looseWholeUom?.code ?? null,
+      qtyOnHand: this.formatDecimal(qtyOnHand),
+      reservedOutQty: this.formatDecimal(new Prisma.Decimal(0)),
+      inTransitInQty: this.formatDecimal(new Prisma.Decimal(0)),
+      availableQty: this.formatDecimal(qtyOnHand),
+      averageUnitCost: this.formatDecimal(averageUnitCost),
+      inventoryValue: this.formatDecimal(inventoryValue),
+      lowStockThreshold: item.lowStockThreshold?.toString() ?? null,
+      stockStatus: this.stockStatus(item.lowStockThreshold ?? null, qtyOnHand),
+      belowLowStock:
+        item.lowStockThreshold !== null &&
+        qtyOnHand.gt(0) &&
+        qtyOnHand.lte(item.lowStockThreshold),
+      lastBusinessDate: lastBusinessDate.toISOString(),
+      lastMovementAt: lastMovementAt.toISOString(),
+    };
+  }
+
+  private async applyTransferReservations(
+    rowMap: Map<string, ReturnType<typeof this.stockRow>>,
+    query: Record<string, string>,
+  ) {
+    const transferLines = await this.prisma.transferLine.findMany({
+      where: {
+        itemId: query.itemId,
+        transfer: {
+          status: {
+            in: [TransferStatus.DISPATCHED, TransferStatus.VARIANCE_REVIEW],
+          },
+        },
+      },
+      include: {
+        item: {
+          include: {
+            baseUom: true,
+            category: true,
+            looseRemainderUom: true,
+            looseWholeUom: true,
+          },
+        },
+        transfer: {
+          include: {
+            sourceLocation: true,
+            targetLocation: true,
+          },
+        },
+      },
+    });
+
+    for (const line of transferLines) {
+      const pickedQty = line.pickedQty ?? new Prisma.Decimal(0);
+      const receivedQty = line.receivedQty ?? new Prisma.Decimal(0);
+      const unresolvedQty = pickedQty.sub(receivedQty);
+
+      if (unresolvedQty.lte(0)) {
+        continue;
+      }
+
+      if (
+        !query.locationId ||
+        line.transfer.sourceLocationId === query.locationId
+      ) {
+        this.addTransferQty(rowMap, {
+          item: line.item,
+          location: line.transfer.sourceLocation,
+          qty: unresolvedQty,
+          type: "reservedOutQty",
+        });
+      }
+
+      if (
+        !query.locationId ||
+        line.transfer.targetLocationId === query.locationId
+      ) {
+        this.addTransferQty(rowMap, {
+          item: line.item,
+          location: line.transfer.targetLocation,
+          qty: unresolvedQty,
+          type: "inTransitInQty",
+        });
+      }
+    }
+  }
+
+  private addTransferQty(
+    rowMap: Map<string, ReturnType<typeof this.stockRow>>,
+    {
+      item,
+      location,
+      qty,
+      type,
+    }: {
+      item: StockOnHandEvent["item"];
+      location: StockOnHandEvent["location"];
+      qty: Prisma.Decimal;
+      type: "reservedOutQty" | "inTransitInQty";
+    },
+  ) {
+    const key = `${location.id}:${item.id}`;
+    const existing =
+      rowMap.get(key) ??
+      this.stockRow({
+        averageUnitCost: new Prisma.Decimal(0),
+        inventoryValue: new Prisma.Decimal(0),
+        item,
+        lastBusinessDate: new Date(),
+        lastMovementAt: new Date(),
+        location,
+        qtyOnHand: new Prisma.Decimal(0),
+      });
+    const nextQty = new Prisma.Decimal(existing[type]).add(qty);
+    const reservedOutQty =
+      type === "reservedOutQty"
+        ? nextQty
+        : new Prisma.Decimal(existing.reservedOutQty);
+    const qtyOnHand = new Prisma.Decimal(existing.qtyOnHand);
+    const availableQty = Prisma.Decimal.max(
+      new Prisma.Decimal(0),
+      qtyOnHand.sub(reservedOutQty),
+    );
+
+    existing[type] = this.formatDecimal(nextQty);
+    existing.availableQty = this.formatDecimal(availableQty);
+    existing.displayAvailableQty = this.formatStockQty(item, availableQty);
+    existing.stockStatus = this.stockStatus(
+      item.lowStockThreshold ?? null,
+      availableQty,
+    );
+    existing.belowLowStock =
+      item.lowStockThreshold !== null &&
+      availableQty.gt(0) &&
+      availableQty.lte(item.lowStockThreshold);
+
+    rowMap.set(key, existing);
+  }
+
+  private stockStatus(
+    lowStockThreshold: Prisma.Decimal | null,
+    qtyOnHand: Prisma.Decimal,
+  ) {
+    if (qtyOnHand.lte(0)) {
+      return "OUT_OF_STOCK";
+    }
+
+    if (lowStockThreshold !== null && qtyOnHand.lte(lowStockThreshold)) {
+      return "LOW";
+    }
+
+    return "OK";
+  }
+
+  private formatStockQty(
+    item: StockOnHandEvent["item"],
+    qtyOnHand: Prisma.Decimal,
+  ) {
+    if (
+      !item.looseCountEnabled ||
+      !item.looseWholeUnitQty ||
+      !item.looseWholeUom ||
+      !item.looseRemainderUom
+    ) {
+      return `${this.formatDecimal(qtyOnHand)} ${item.baseUom.code}`;
+    }
+
+    const wholeUnitQty = item.looseWholeUnitQty;
+
+    if (wholeUnitQty.lte(0)) {
+      return `${this.formatDecimal(qtyOnHand)} ${item.baseUom.code}`;
+    }
+
+    const wholeUnits = qtyOnHand.div(wholeUnitQty).floor();
+    const baseRemainder = qtyOnHand.sub(wholeUnits.mul(wholeUnitQty));
+    const looseRemainder = this.convertBaseRemainderToLoose(
+      baseRemainder,
+      item.baseUom.code,
+      item.looseRemainderUom.code,
+    );
+
+    return `${wholeUnits.toString()} ${item.looseWholeUom.code} + ${this.formatDecimal(looseRemainder)} ${item.looseRemainderUom.code}`;
+  }
+
+  private convertBaseRemainderToLoose(
+    qty: Prisma.Decimal,
+    baseUomCode: string,
+    looseUomCode: string,
+  ) {
+    if (baseUomCode === looseUomCode) {
+      return qty;
+    }
+
+    const factorByPair: Record<string, string> = {
+      "KG:G": "1000",
+      "L:ML": "1000",
+    };
+    const factor = factorByPair[`${baseUomCode}:${looseUomCode}`];
+
+    return factor ? qty.mul(factor) : qty;
+  }
+
+  private formatDecimal(value: Prisma.Decimal) {
+    return value.toDecimalPlaces(6).toString();
   }
 
   private toJsonInput(
@@ -504,5 +1215,15 @@ export class LedgerService {
       unitCostAtTime: event.unitCostAtTime.toString(),
       extendedCost: event.extendedCost.toString(),
     };
+  }
+
+  private toResponseJson<T>(value: T): T {
+    return JSON.parse(
+      JSON.stringify(value, (_key, nestedValue) =>
+        nestedValue instanceof Prisma.Decimal
+          ? nestedValue.toString()
+          : nestedValue,
+      ),
+    ) as T;
   }
 }

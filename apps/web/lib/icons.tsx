@@ -1,4 +1,4 @@
-import type { LucideIcon } from 'lucide-react';
+import type { LucideIcon } from "lucide-react";
 import {
   Activity,
   AlertTriangle,
@@ -16,6 +16,8 @@ import {
   Check,
   CheckCircle2,
   ChefHat,
+  ChevronDown,
+  ChevronUp,
   CircleAlert,
   CircleCheck,
   CircleX,
@@ -88,7 +90,7 @@ import {
   WifiOff,
   X,
   XCircle,
-} from 'lucide-react';
+} from "lucide-react";
 
 export const icons = {
   Activity,
@@ -107,6 +109,8 @@ export const icons = {
   Check,
   CheckCircle2,
   ChefHat,
+  ChevronDown,
+  ChevronUp,
   CircleAlert,
   CircleCheck,
   CircleX,
@@ -190,7 +194,19 @@ type IconProps = {
   strokeWidth?: number;
 };
 
-export function Icon({ name, size = 20, className, strokeWidth = 2 }: IconProps) {
+export function Icon({
+  name,
+  size = 20,
+  className,
+  strokeWidth = 2,
+}: IconProps) {
   const Component = icons[name];
-  return <Component aria-hidden="true" className={className} size={size} strokeWidth={strokeWidth} />;
+  return (
+    <Component
+      aria-hidden="true"
+      className={className}
+      size={size}
+      strokeWidth={strokeWidth}
+    />
+  );
 }

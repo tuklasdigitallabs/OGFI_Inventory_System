@@ -1,9 +1,9 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { PassportStrategy } from '@nestjs/passport';
-import { ExtractJwt, Strategy } from 'passport-jwt';
-import { PrismaService } from '../../prisma/prisma.service';
-import { AccessTokenPayload, AuthenticatedUser } from '../types';
+import { Injectable, UnauthorizedException } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { PassportStrategy } from "@nestjs/passport";
+import { ExtractJwt, Strategy } from "passport-jwt";
+import { PrismaService } from "../../prisma/prisma.service";
+import { AccessTokenPayload, AuthenticatedUser } from "../types";
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -14,7 +14,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: config.get<string>('JWT_ACCESS_SECRET') ?? 'replace-with-access-secret',
+      secretOrKey: jwtSecret(config),
     });
   }
 
@@ -36,7 +36,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
 
     if (!user?.active) {
-      throw new UnauthorizedException('Invalid or inactive user.');
+      throw new UnauthorizedException("Invalid or inactive user.");
     }
 
     return {
@@ -49,8 +49,24 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         code: user.role.code,
         name: user.role.name,
       },
-      permissions: user.role.permissions.map(({ permission }) => `${permission.module}:${permission.action}`),
+      permissions: user.role.permissions.map(
+        ({ permission }) => `${permission.module}:${permission.action}`,
+      ),
       locationIds: user.locationAccess.map(({ locationId }) => locationId),
     };
   }
+}
+
+function jwtSecret(config: ConfigService) {
+  const secret = config.get<string>("JWT_ACCESS_SECRET");
+
+  if (secret) {
+    return secret;
+  }
+
+  if (config.get<string>("NODE_ENV") === "production") {
+    throw new Error("JWT_ACCESS_SECRET is required in production.");
+  }
+
+  return "replace-with-access-secret";
 }

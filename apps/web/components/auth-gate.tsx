@@ -1,19 +1,37 @@
-'use client';
+"use client";
 
-import { FormEvent, useEffect, useState } from 'react';
-import { Icon } from '@/lib/icons';
+import {
+  cloneElement,
+  createElement,
+  FormEvent,
+  isValidElement,
+  type ReactElement,
+  useEffect,
+  useState,
+} from "react";
+import { Icon } from "@/lib/icons";
+import {
+  ApiClient,
+  API_URL,
+  TOKEN_KEY,
+  type AuthenticatedUser,
+  type OfflinePinStatus,
+} from "@/lib/api-client";
+import { clearOfflineData } from "@/lib/offline-db";
+import {
+  clearOfflinePin,
+  hasOfflinePin,
+  isOfflineSessionExpired,
+  isOfflineUnlocked,
+  lockOfflineSession,
+  offlinePinMatchesPolicy,
+  setupOfflinePin,
+  touchOfflineSession,
+  unlockOfflinePin,
+} from "@/lib/offline-crypto";
 
 type AuthGateProps = {
   children: React.ReactNode;
-};
-
-type AuthenticatedUser = {
-  email: string;
-  fullName: string;
-  role: {
-    code: string;
-    name: string;
-  };
 };
 
 type LoginResponse = {
@@ -21,18 +39,29 @@ type LoginResponse = {
   user: AuthenticatedUser;
 };
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3000/api';
-const TOKEN_KEY = 'ogfi.accessToken';
+type AuthGateChildProps = {
+  currentUser?: AuthenticatedUser;
+  onLogout?: () => void;
+};
 
 export function AuthGate({ children }: AuthGateProps) {
-  const [identifier, setIdentifier] = useState('admin');
-  const [password, setPassword] = useState('');
+  const [captchaKey, setCaptchaKey] = useState(0);
+  const [identifier, setIdentifier] = useState("admin");
+  const [offlinePin, setOfflinePin] = useState("");
+  const [offlinePinMode, setOfflinePinMode] = useState<
+    "setup" | "unlock" | null
+  >(null);
+  const [offlinePinStatus, setOfflinePinStatus] =
+    useState<OfflinePinStatus | null>(null);
+  const [password, setPassword] = useState("");
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<AuthenticatedUser | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    void import("altcha");
+
     const storedToken = window.localStorage.getItem(TOKEN_KEY);
 
     if (!storedToken) {
@@ -40,24 +69,70 @@ export function AuthGate({ children }: AuthGateProps) {
       return;
     }
 
+    if (!navigator.onLine && hasOfflinePin() && !isOfflineUnlocked()) {
+      setToken(storedToken);
+      setOfflinePinMode("unlock");
+      setLoading(false);
+      return;
+    }
+
     void loadCurrentUser(storedToken);
   }, []);
 
+  useEffect(() => {
+    function touchSession() {
+      touchOfflineSession();
+    }
+
+    function unlockOfflineStorage() {
+      if (!navigator.onLine && hasOfflinePin() && !isOfflineUnlocked()) {
+        setOfflinePinMode("unlock");
+      }
+    }
+
+    window.addEventListener("click", touchSession);
+    window.addEventListener("keydown", touchSession);
+    window.addEventListener("focus", touchSession);
+    window.addEventListener(
+      "ogfi:offline-unlock-required",
+      unlockOfflineStorage,
+    );
+
+    const intervalId = window.setInterval(() => {
+      if (
+        !navigator.onLine &&
+        user &&
+        hasOfflinePin() &&
+        isOfflineSessionExpired()
+      ) {
+        lockOfflineSession();
+        setOfflinePinMode("unlock");
+      }
+    }, 30000);
+
+    return () => {
+      window.removeEventListener("click", touchSession);
+      window.removeEventListener("keydown", touchSession);
+      window.removeEventListener("focus", touchSession);
+      window.removeEventListener(
+        "ogfi:offline-unlock-required",
+        unlockOfflineStorage,
+      );
+      window.clearInterval(intervalId);
+    };
+  }, [user]);
+
   async function loadCurrentUser(accessToken: string) {
     try {
-      const response = await fetch(`${API_URL}/auth/me`, {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error('Session expired.');
-      }
-
-      const currentUser = (await response.json()) as AuthenticatedUser;
+      const client = new ApiClient(accessToken);
+      const [currentUser, pinStatus] = await Promise.all([
+        client.currentUser(),
+        client.offlinePinStatus().catch(() => null),
+      ]);
       setToken(accessToken);
       setUser(currentUser);
+      setOfflinePinStatus(pinStatus);
+      setOfflinePinMode(navigator.onLine ? null : offlinePinModeFor(pinStatus));
     } catch {
       window.localStorage.removeItem(TOKEN_KEY);
       setToken(null);
@@ -73,45 +148,183 @@ export function AuthGate({ children }: AuthGateProps) {
     setLoading(true);
 
     try {
+      const altcha = String(
+        new FormData(event.currentTarget).get("altcha") ?? "",
+      );
+
+      if (!altcha) {
+        throw new Error("Complete the CAPTCHA before signing in.");
+      }
+
       const response = await fetch(`${API_URL}/auth/login`, {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
-        body: JSON.stringify({ identifier, password }),
+        body: JSON.stringify({ altcha, identifier, password }),
       });
 
       if (!response.ok) {
-        throw new Error('Invalid username or password.');
+        throw new Error("Invalid username or password.");
       }
 
       const result = (await response.json()) as LoginResponse;
+      const pinStatus = await new ApiClient(result.accessToken)
+        .offlinePinStatus()
+        .catch(() => null);
       window.localStorage.setItem(TOKEN_KEY, result.accessToken);
       setToken(result.accessToken);
       setUser(result.user);
+      setOfflinePinStatus(pinStatus);
+      setOfflinePinMode(null);
     } catch (loginError) {
       setToken(null);
       setUser(null);
-      setError(loginError instanceof Error ? loginError.message : 'Unable to log in.');
+      setCaptchaKey((key) => key + 1);
+      setError(
+        loginError instanceof Error ? loginError.message : "Unable to log in.",
+      );
     } finally {
       setLoading(false);
     }
   }
 
-  function logout() {
+  async function logout() {
+    lockOfflineSession();
+    await clearOfflineData();
     window.localStorage.removeItem(TOKEN_KEY);
     setToken(null);
     setUser(null);
-    setPassword('');
+    setOfflinePin("");
+    setOfflinePinStatus(null);
+    setOfflinePinMode(null);
+    setPassword("");
+  }
+
+  async function submitOfflinePin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError(null);
+
+    try {
+      if (offlinePinMode === "setup") {
+        if (!token || !user) {
+          throw new Error("Sign in before registering offline PIN.");
+        }
+
+        if (!offlinePinStatus?.configured) {
+          throw new Error("Offline PIN is not configured by admin yet.");
+        }
+
+        const verified = await new ApiClient(token).verifyOfflinePin(
+          offlinePin,
+        );
+        await setupOfflinePin(user.id, offlinePin, verified.updatedAt);
+        await clearOfflineData();
+        setOfflinePinMode(null);
+      } else {
+        await unlockOfflinePin(offlinePin);
+
+        if (token && !user) {
+          await loadCurrentUser(token);
+        }
+
+        setOfflinePinMode(null);
+      }
+
+      setOfflinePin("");
+    } catch (pinError) {
+      setError(
+        pinError instanceof Error
+          ? pinError.message
+          : "Unable to unlock offline storage.",
+      );
+    }
+  }
+
+  async function resetThisBrowserOfflineData() {
+    await clearOfflineData();
+    clearOfflinePin();
+    setError(null);
+    setOfflinePin("");
+    setOfflinePinMode(null);
+
+    if (token) {
+      setLoading(true);
+      await loadCurrentUser(token);
+    }
   }
 
   if (loading && !user) {
     return (
       <div className="grid min-h-screen place-items-center bg-[#f7f8f5] px-4 text-og-dark">
         <div className="flex items-center gap-3 text-sm font-semibold text-og-gray">
-          <Icon name="RefreshCw" size={20} className="animate-spin text-og-green" />
+          <Icon
+            name="RefreshCw"
+            size={20}
+            className="animate-spin text-og-green"
+          />
           Loading session
         </div>
+      </div>
+    );
+  }
+
+  if (offlinePinMode) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-[#f7f8f5] px-4 py-8 text-og-dark">
+        <form
+          className="w-full max-w-sm rounded-md border border-og-line bg-white p-5 shadow-sm"
+          onSubmit={submitOfflinePin}
+        >
+          <div className="mb-5 flex items-center gap-3">
+            <span className="grid h-10 w-10 place-items-center rounded-md bg-og-green font-poppins text-lg font-bold text-white">
+              OG
+            </span>
+            <div>
+              <h1 className="font-poppins text-xl font-semibold">
+                {offlinePinMode === "setup"
+                  ? "Enter Offline PIN"
+                  : "Unlock Offline Data"}
+              </h1>
+              <p className="text-sm text-og-gray">
+                Offline data is encrypted on this browser.
+              </p>
+            </div>
+          </div>
+
+          <label className="block text-sm font-semibold">
+            Offline PIN
+            <input
+              className="mt-1 h-11 w-full rounded-md border border-og-line px-3 text-sm outline-none focus:border-og-green"
+              minLength={6}
+              onChange={(event) => setOfflinePin(event.target.value)}
+              type="password"
+              value={offlinePin}
+            />
+          </label>
+
+          {error ? (
+            <p className="mt-3 text-sm font-semibold text-red-700">{error}</p>
+          ) : null}
+
+          <button
+            className="mt-5 inline-flex h-11 w-full items-center justify-center gap-2 rounded-md bg-og-green px-4 text-sm font-semibold text-white disabled:opacity-60"
+            type="submit"
+          >
+            <Icon name="LockKeyhole" size={18} />
+            {offlinePinMode === "setup" ? "Register This Browser" : "Unlock"}
+          </button>
+
+          {offlinePinMode === "unlock" ? (
+            <button
+              className="mt-3 h-10 w-full rounded-md border border-og-line px-4 text-sm font-semibold text-og-gray"
+              type="button"
+              onClick={resetThisBrowserOfflineData}
+            >
+              Reset this browser offline data
+            </button>
+          ) : null}
+        </form>
       </div>
     );
   }
@@ -119,13 +332,18 @@ export function AuthGate({ children }: AuthGateProps) {
   if (!token || !user) {
     return (
       <div className="grid min-h-screen place-items-center bg-[#f7f8f5] px-4 py-8 text-og-dark">
-        <form className="w-full max-w-sm rounded-md border border-og-line bg-white p-5 shadow-sm" onSubmit={login}>
+        <form
+          className="w-full max-w-sm rounded-md border border-og-line bg-white p-5 shadow-sm"
+          onSubmit={login}
+        >
           <div className="mb-5 flex items-center gap-3">
             <span className="grid h-10 w-10 place-items-center rounded-md bg-og-green font-poppins text-lg font-bold text-white">
               OG
             </span>
             <div>
-              <h1 className="font-poppins text-xl font-semibold">OGFI Inventory</h1>
+              <h1 className="font-poppins text-xl font-semibold">
+                OGFI Inventory
+              </h1>
               <p className="text-sm text-og-gray">Sign in to continue</p>
             </div>
           </div>
@@ -149,7 +367,19 @@ export function AuthGate({ children }: AuthGateProps) {
             />
           </label>
 
-          {error ? <p className="mt-3 text-sm font-semibold text-red-700">{error}</p> : null}
+          {error ? (
+            <p className="mt-3 text-sm font-semibold text-red-700">{error}</p>
+          ) : null}
+
+          <div className="mt-4">
+            {createElement("altcha-widget", {
+              challenge: `${API_URL}/auth/altcha-challenge`,
+              hidefooter: "true",
+              hidelogo: "true",
+              key: captchaKey,
+              name: "altcha",
+            })}
+          </div>
 
           <button
             className="mt-5 inline-flex h-11 w-full items-center justify-center gap-2 rounded-md bg-og-green px-4 text-sm font-semibold text-white disabled:opacity-60"
@@ -166,16 +396,30 @@ export function AuthGate({ children }: AuthGateProps) {
 
   return (
     <>
-      <div className="fixed right-4 top-4 z-30 hidden items-center gap-2 rounded-md border border-og-line bg-white px-3 py-2 text-xs font-semibold text-og-gray shadow-sm lg:flex">
-        <Icon name="ShieldCheck" size={16} className="text-og-green" />
-        <span>{user.fullName}</span>
-        <span className="text-og-line">|</span>
-        <span>{user.role.name}</span>
-        <button className="text-og-green" onClick={logout} type="button">
-          Sign out
-        </button>
-      </div>
-      {children}
+      {isValidElement(children)
+        ? cloneElement(children as ReactElement<AuthGateChildProps>, {
+            currentUser: user,
+            onLogout: logout,
+          })
+        : children}
     </>
   );
+}
+
+function offlinePinModeFor(
+  pinStatus: OfflinePinStatus | null,
+): "setup" | "unlock" | null {
+  if (!pinStatus?.configured) {
+    return null;
+  }
+
+  if (!hasOfflinePin() || !offlinePinMatchesPolicy(pinStatus.updatedAt)) {
+    return "setup";
+  }
+
+  if (!isOfflineUnlocked()) {
+    return "unlock";
+  }
+
+  return null;
 }

@@ -29,6 +29,7 @@
     "@nestjs/platform-express": "^10.3.10",
     "@nestjs/swagger": "^7.4.0",
     "@prisma/client": "^5.17.0",
+    "altcha-lib": "^2.0.3",
     "bcrypt": "^5.1.1",
     "bullmq": "^5.12.11",
     "class-transformer": "^0.5.1",

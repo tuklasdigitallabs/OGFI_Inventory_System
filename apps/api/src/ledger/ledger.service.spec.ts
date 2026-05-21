@@ -1,42 +1,43 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from "@nestjs/common";
 import {
   Prisma,
   ReferenceType,
   RoleCode,
   TransactionType,
-} from '@prisma/client';
-import { AuthenticatedUser } from '../auth/types';
-import { LedgerService } from './ledger.service';
+} from "@prisma/client";
+import { AuthenticatedUser } from "../auth/types";
+import { CostingService } from "../costing/costing.service";
+import { LedgerService } from "./ledger.service";
 
-const baseLocationId = '44444444-4444-4444-4444-444444444444';
+const baseLocationId = "44444444-4444-4444-4444-444444444444";
 
 const user: AuthenticatedUser = {
-  id: '11111111-1111-1111-1111-111111111111',
-  email: 'admin@example.com',
-  username: 'admin',
-  fullName: 'Admin User',
+  id: "11111111-1111-1111-1111-111111111111",
+  email: "admin@example.com",
+  username: "admin",
+  fullName: "Admin User",
   role: {
-    id: '22222222-2222-2222-2222-222222222222',
+    id: "22222222-2222-2222-2222-222222222222",
     code: RoleCode.ADMIN,
-    name: 'Admin',
+    name: "Admin",
   },
   permissions: [],
   locationIds: [baseLocationId],
 };
 
 const baseDto = {
-  uuid: '33333333-3333-3333-3333-333333333333',
+  uuid: "33333333-3333-3333-3333-333333333333",
   locationId: baseLocationId,
-  itemId: '55555555-5555-5555-5555-555555555555',
+  itemId: "55555555-5555-5555-5555-555555555555",
   unitCostAtTime: 12.5,
   referenceType: ReferenceType.ADJUSTMENT,
-  referenceId: '66666666-6666-6666-6666-666666666666',
-  businessDate: '2026-05-05T00:00:00.000Z',
+  referenceId: "66666666-6666-6666-6666-666666666666",
+  businessDate: "2026-05-05T00:00:00.000Z",
 };
 
 function makeEvent(overrides: Record<string, unknown> = {}) {
   return {
-    id: '77777777-7777-7777-7777-777777777777',
+    id: "77777777-7777-7777-7777-777777777777",
     uuid: overrides.uuid ?? baseDto.uuid,
     locationId: overrides.locationId ?? baseDto.locationId,
     itemId: overrides.itemId ?? baseDto.itemId,
@@ -53,7 +54,7 @@ function makeEvent(overrides: Record<string, unknown> = {}) {
     approvedById: overrides.approvedById ?? null,
     reversalOfId: overrides.reversalOfId ?? null,
     metadata: overrides.metadata ?? null,
-    createdAt: overrides.createdAt ?? new Date('2026-05-05T01:00:00.000Z'),
+    createdAt: overrides.createdAt ?? new Date("2026-05-05T01:00:00.000Z"),
   };
 }
 
@@ -61,6 +62,8 @@ function makeTx() {
   const tx = {
     ledgerEvent: {
       findUnique: jest.fn(),
+      findMany: jest.fn().mockResolvedValue([]),
+      findFirst: jest.fn(),
       create: jest.fn(({ data }) => Promise.resolve(makeEvent(data))),
     },
     location: {
@@ -78,7 +81,7 @@ function makeTx() {
     auditLog: {
       create: jest
         .fn()
-        .mockResolvedValue({ id: '88888888-8888-8888-8888-888888888888' }),
+        .mockResolvedValue({ id: "88888888-8888-8888-8888-888888888888" }),
     },
     purchaseOrder: {
       findUnique: jest.fn(),
@@ -116,16 +119,48 @@ function makeService(tx = makeTx()) {
       findMany: jest.fn(),
       findUnique: jest.fn(),
     },
+    transferLine: {
+      findMany: jest.fn().mockResolvedValue([]),
+    },
   };
 
   return {
     tx,
     prisma,
-    service: new LedgerService(prisma as never),
+    service: new LedgerService(prisma as never, new CostingService()),
   };
 }
 
-describe('LedgerService', () => {
+function makeStockOnHandEvent(overrides: Record<string, unknown> = {}) {
+  return {
+    ...makeEvent(overrides),
+    item: {
+      id: overrides.itemId ?? baseDto.itemId,
+      sku: overrides.sku ?? "BEEF-BRISKET",
+      name: overrides.itemName ?? "Beef Brisket",
+      lowStockThreshold: overrides.lowStockThreshold ?? new Prisma.Decimal(5),
+      baseUom: {
+        id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        code: "KG",
+        name: "Kilogram",
+        active: true,
+        createdAt: new Date("2026-05-01T00:00:00.000Z"),
+        updatedAt: new Date("2026-05-01T00:00:00.000Z"),
+      },
+    },
+    location: {
+      id: overrides.locationId ?? baseDto.locationId,
+      code: "MAIN-WH",
+      name: "Main Commissary Warehouse",
+      type: "WAREHOUSE",
+      active: true,
+      createdAt: new Date("2026-05-01T00:00:00.000Z"),
+      updatedAt: new Date("2026-05-01T00:00:00.000Z"),
+    },
+  };
+}
+
+describe("LedgerService", () => {
   it.each([
     [TransactionType.RECEIVE, 5, 0],
     [TransactionType.TRANSFER_IN, 5, 0],
@@ -136,10 +171,34 @@ describe('LedgerService', () => {
     [TransactionType.STOCK_COUNT, 5, 0],
     [TransactionType.ADJUSTMENT, 0, 5],
   ])(
-    'posts %s events with valid quantity direction',
+    "posts %s events with valid quantity direction",
     async (transactionType, qtyIn, qtyOut) => {
       const { service, tx } = makeService();
       tx.ledgerEvent.findUnique.mockResolvedValue(null);
+      tx.ledgerEvent.findMany.mockResolvedValue(
+        qtyOut > 0
+          ? [
+              makeEvent({
+                transactionType: TransactionType.RECEIVE,
+                qtyIn: new Prisma.Decimal(10),
+                unitCostAtTime: new Prisma.Decimal(12.5),
+                extendedCost: new Prisma.Decimal(125),
+              }),
+            ]
+          : [],
+      );
+      tx.ledgerEvent.findFirst.mockResolvedValue(
+        transactionType === TransactionType.TRANSFER_IN
+          ? makeEvent({
+              transactionType: TransactionType.TRANSFER_OUT,
+              qtyIn: new Prisma.Decimal(0),
+              qtyOut: new Prisma.Decimal(5),
+              unitCostAtTime: new Prisma.Decimal(12.5),
+              extendedCost: new Prisma.Decimal(62.5),
+              referenceType: ReferenceType.TRANSFER,
+            })
+          : null,
+      );
 
       const result = await service.postEvent(
         {
@@ -151,13 +210,14 @@ describe('LedgerService', () => {
         user,
       );
 
-      expect(result.status).toBe('posted');
+      expect(result.status).toBe("posted");
       expect(tx.ledgerEvent.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
             transactionType,
             qtyIn: new Prisma.Decimal(qtyIn),
             qtyOut: new Prisma.Decimal(qtyOut),
+            unitCostAtTime: new Prisma.Decimal(12.5),
             extendedCost: new Prisma.Decimal(62.5),
           }),
         }),
@@ -165,16 +225,16 @@ describe('LedgerService', () => {
       expect(tx.auditLog.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
-            module: 'ledger',
-            action: 'ledger.events.posted',
-            entityType: 'LedgerEvent',
+            module: "ledger",
+            action: "ledger.events.posted",
+            entityType: "LedgerEvent",
           }),
         }),
       );
     },
   );
 
-  it('returns the existing event for duplicate UUIDs without writing another row', async () => {
+  it("returns the existing event for duplicate UUIDs without writing another row", async () => {
     const existing = makeEvent({
       qtyIn: new Prisma.Decimal(5),
       extendedCost: new Prisma.Decimal(62.5),
@@ -192,13 +252,13 @@ describe('LedgerService', () => {
       user,
     );
 
-    expect(result.status).toBe('already_posted');
+    expect(result.status).toBe("already_posted");
     expect(result.idempotent).toBe(true);
     expect(tx.ledgerEvent.create).not.toHaveBeenCalled();
     expect(tx.auditLog.create).not.toHaveBeenCalled();
   });
 
-  it('rejects invalid quantity combinations', async () => {
+  it("rejects invalid quantity combinations", async () => {
     const { service, tx } = makeService();
     tx.ledgerEvent.findUnique.mockResolvedValue(null);
 
@@ -217,9 +277,160 @@ describe('LedgerService', () => {
     expect(tx.ledgerEvent.create).not.toHaveBeenCalled();
   });
 
-  it('posts a reversal with inverted quantities and an audit log', async () => {
+  it("returns stock-on-hand with moving average cost from ledger history", async () => {
+    const { service, prisma } = makeService();
+    prisma.ledgerEvent.findMany.mockResolvedValue([
+      makeStockOnHandEvent({
+        transactionType: TransactionType.RECEIVE,
+        qtyIn: new Prisma.Decimal(10),
+        unitCostAtTime: new Prisma.Decimal(10),
+        extendedCost: new Prisma.Decimal(100),
+        businessDate: new Date("2026-05-01T00:00:00.000Z"),
+        createdAt: new Date("2026-05-01T01:00:00.000Z"),
+      }),
+      makeStockOnHandEvent({
+        uuid: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        transactionType: TransactionType.RECEIVE,
+        qtyIn: new Prisma.Decimal(10),
+        unitCostAtTime: new Prisma.Decimal(20),
+        extendedCost: new Prisma.Decimal(200),
+        businessDate: new Date("2026-05-02T00:00:00.000Z"),
+        createdAt: new Date("2026-05-02T01:00:00.000Z"),
+      }),
+      makeStockOnHandEvent({
+        uuid: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        transactionType: TransactionType.WASTAGE,
+        qtyIn: new Prisma.Decimal(0),
+        qtyOut: new Prisma.Decimal(5),
+        unitCostAtTime: new Prisma.Decimal(15),
+        extendedCost: new Prisma.Decimal(75),
+        businessDate: new Date("2026-05-03T00:00:00.000Z"),
+        createdAt: new Date("2026-05-03T01:00:00.000Z"),
+      }),
+    ]);
+
+    const result = (await service.list("inventory.stock-on-hand", {
+      locationId: baseLocationId,
+    })) as unknown as { data: Array<Record<string, string>> };
+
+    expect(result.data).toEqual([
+      expect.objectContaining({
+        locationCode: "MAIN-WH",
+        sku: "BEEF-BRISKET",
+        qtyOnHand: "15",
+        averageUnitCost: "15",
+        inventoryValue: "225",
+      }),
+    ]);
+  });
+
+  it("uses the current moving average cost for outbound events", async () => {
+    const { service, tx } = makeService();
+    tx.ledgerEvent.findUnique.mockResolvedValue(null);
+    tx.ledgerEvent.findMany.mockResolvedValue([
+      makeEvent({
+        transactionType: TransactionType.RECEIVE,
+        qtyIn: new Prisma.Decimal(10),
+        unitCostAtTime: new Prisma.Decimal(10),
+        extendedCost: new Prisma.Decimal(100),
+      }),
+      makeEvent({
+        uuid: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        transactionType: TransactionType.RECEIVE,
+        qtyIn: new Prisma.Decimal(10),
+        unitCostAtTime: new Prisma.Decimal(20),
+        extendedCost: new Prisma.Decimal(200),
+      }),
+    ]);
+
+    await service.postEvent(
+      {
+        ...baseDto,
+        transactionType: TransactionType.WASTAGE,
+        qtyIn: 0,
+        qtyOut: 5,
+        unitCostAtTime: 999,
+      },
+      user,
+    );
+
+    expect(tx.ledgerEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          unitCostAtTime: new Prisma.Decimal(15),
+          extendedCost: new Prisma.Decimal(75),
+        }),
+      }),
+    );
+  });
+
+  it("uses dispatched transfer cost for transfer receipts", async () => {
+    const { service, tx } = makeService();
+    tx.ledgerEvent.findUnique.mockResolvedValue(null);
+    tx.transfer.findUnique.mockResolvedValue({ id: baseDto.referenceId });
+    tx.ledgerEvent.findFirst.mockResolvedValue(
+      makeEvent({
+        transactionType: TransactionType.TRANSFER_OUT,
+        qtyIn: new Prisma.Decimal(0),
+        qtyOut: new Prisma.Decimal(5),
+        unitCostAtTime: new Prisma.Decimal(13.75),
+        extendedCost: new Prisma.Decimal(68.75),
+        referenceType: ReferenceType.TRANSFER,
+      }),
+    );
+
+    await service.postEvent(
+      {
+        ...baseDto,
+        referenceType: ReferenceType.TRANSFER,
+        transactionType: TransactionType.TRANSFER_IN,
+        qtyIn: 5,
+        qtyOut: 0,
+        unitCostAtTime: 999,
+      },
+      user,
+    );
+
+    expect(tx.ledgerEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          unitCostAtTime: new Prisma.Decimal(13.75),
+          extendedCost: new Prisma.Decimal(68.75),
+        }),
+      }),
+    );
+  });
+
+  it("rejects outbound events that would create negative stock", async () => {
+    const { service, tx } = makeService();
+    tx.ledgerEvent.findUnique.mockResolvedValue(null);
+    tx.ledgerEvent.findMany.mockResolvedValue([
+      makeEvent({
+        transactionType: TransactionType.RECEIVE,
+        qtyIn: new Prisma.Decimal(4),
+        unitCostAtTime: new Prisma.Decimal(10),
+        extendedCost: new Prisma.Decimal(40),
+      }),
+    ]);
+
+    await expect(
+      service.postEvent(
+        {
+          ...baseDto,
+          transactionType: TransactionType.SALE_CONSUMPTION,
+          qtyIn: 0,
+          qtyOut: 5,
+        },
+        user,
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(tx.ledgerEvent.create).not.toHaveBeenCalled();
+  });
+
+  it("posts a reversal with inverted quantities and an audit log", async () => {
     const original = makeEvent({
-      id: '99999999-9999-9999-9999-999999999999',
+      id: "99999999-9999-9999-9999-999999999999",
       transactionType: TransactionType.TRANSFER_OUT,
       qtyIn: new Prisma.Decimal(0),
       qtyOut: new Prisma.Decimal(8),
@@ -233,13 +444,13 @@ describe('LedgerService', () => {
     const result = await service.reverseEvent(
       original.id,
       {
-        uuid: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
-        reason: 'Correction',
+        uuid: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        reason: "Correction",
       },
       user,
     );
 
-    expect(result.status).toBe('posted');
+    expect(result.status).toBe("posted");
     expect(tx.ledgerEvent.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -252,7 +463,7 @@ describe('LedgerService', () => {
     expect(tx.auditLog.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          action: 'ledger.events.reversed',
+          action: "ledger.events.reversed",
           after: expect.objectContaining({
             originalEventId: original.id,
             originalEventUuid: original.uuid,

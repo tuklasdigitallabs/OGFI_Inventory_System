@@ -1,9 +1,11 @@
-import type { Metadata } from 'next';
-import './globals.css';
+import type { Metadata } from "next";
+import { PwaRegister } from "@/components/pwa-register";
+import "./globals.css";
 
 export const metadata: Metadata = {
-  title: 'OGFI Inventory',
-  description: 'Centralized inventory, costing, reporting, and offline sync console',
+  title: "OGFI Inventory",
+  description:
+    "Centralized inventory, costing, reporting, and offline sync console",
 };
 
 export default function RootLayout({
@@ -13,7 +15,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className="font-inter">{children}</body>
+      <body className="font-inter">
+        <PwaRegister />
+        {children}
+      </body>
     </html>
   );
 }
