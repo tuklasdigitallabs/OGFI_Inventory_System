@@ -553,3 +553,38 @@ These are intentionally left for the next Offline Sync slice:
 ### Phase 11 Pass Criteria
 
 Phase 11 passes when users can queue offline stock-touching events, submit them as sync batches, verify ledger results, confirm duplicate UUID idempotency, and edit/retry rejected local entries.
+
+## Security Hardening Validation
+
+Scope: API request throttling, security headers, nginx edge limits, and VPS port exposure.
+
+### 1. API Request Limits
+
+- Call `/api/auth/login` more than 10 times from the same client IP within 60 seconds.
+- Confirm the API returns HTTP 429 with a retry message after the allowed attempts.
+- Call `/api/auth/altcha-challenge` more than 30 times from the same client IP within 60 seconds.
+- Confirm the API returns HTTP 429 after the allowed challenge requests.
+- Browse normal authenticated app pages and confirm ordinary API traffic still works.
+
+Expected result: login and ALTCHA challenge abuse is throttled without blocking normal app use.
+
+### 2. Security Headers
+
+- Request `https://inventory.onegourmetph.com/` and `https://inventory.onegourmetph.com/api/auth/altcha-challenge`.
+- Confirm HTTPS remains active and HSTS is present.
+- Confirm API responses do not expose `X-Powered-By`.
+
+Expected result: public responses keep security headers and avoid framework disclosure.
+
+### 3. VPS Port Exposure
+
+- Check public listening ports on the VPS.
+- Confirm only intended public ports remain reachable: 22 for SSH, 80 for HTTP redirect/ACME, and 443 for HTTPS.
+- Confirm Postgres, Redis, API, web, and internal QSYS app ports are not directly exposed.
+
+Expected result: public traffic reaches apps through nginx only.
+
+### Known Limitations
+
+- In-memory API throttling is per API container. If the API is scaled horizontally later, replace it with shared Redis-backed throttling.
+- Firewall and SSH daemon hardening require sudo/root access to verify and enforce.
