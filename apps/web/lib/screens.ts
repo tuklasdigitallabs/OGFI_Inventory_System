@@ -33,19 +33,98 @@ export type Screen = {
 };
 
 export const navigation = [
-  { label: "Dashboard", href: "/", icon: "LayoutDashboard" },
-  { label: "Inventory", href: "/inventory", icon: "Package" },
-  { label: "Master Data", href: "/master-data", icon: "Database" },
-  { label: "Purchasing", href: "/purchasing", icon: "ShoppingCart" },
-  { label: "Receiving", href: "/receiving", icon: "PackageCheck" },
-  { label: "Transfers", href: "/transfers", icon: "Truck" },
-  { label: "Store Operations", href: "/store-operations", icon: "Store" },
-  { label: "Recipes", href: "/recipes", icon: "ChefHat" },
-  { label: "Menu Pricing", href: "/menu-pricing", icon: "Utensils" },
-  { label: "Reports", href: "/reports", icon: "BarChart3" },
-  { label: "Offline Sync", href: "/offline-sync", icon: "CloudSync" },
-  { label: "Admin Settings", href: "/admin", icon: "Settings" },
-] satisfies Array<{ label: string; href: string; icon: IconName }>;
+  {
+    label: "Dashboard",
+    href: "/",
+    icon: "LayoutDashboard",
+    permissions: ["inventory.stock:read"],
+  },
+  {
+    label: "Inventory",
+    href: "/inventory",
+    icon: "Package",
+    permissions: ["inventory.stock:read"],
+  },
+  {
+    label: "Master Data",
+    href: "/master-data",
+    icon: "Database",
+    permissions: ["master-data.items:read"],
+  },
+  {
+    label: "Purchasing",
+    href: "/purchasing",
+    icon: "ShoppingCart",
+    permissions: ["purchasing.purchase-orders:read"],
+  },
+  {
+    label: "Receiving",
+    href: "/receiving",
+    icon: "PackageCheck",
+    permissions: ["purchasing.receivings:read", "purchasing.receivings:create"],
+  },
+  {
+    label: "Transfers",
+    href: "/transfers",
+    icon: "Truck",
+    permissions: ["transfers:read"],
+  },
+  {
+    label: "Store Operations",
+    href: "/store-operations",
+    icon: "Store",
+    permissions: [
+      "branch.wastage:read",
+      "branch.stock-counts:read",
+      "branch.issues:read",
+      "branch.sales-batches:read",
+    ],
+  },
+  {
+    label: "Recipes",
+    href: "/recipes",
+    icon: "ChefHat",
+    permissions: ["master-data.recipes:read"],
+  },
+  {
+    label: "Menu Pricing",
+    href: "/menu-pricing",
+    icon: "Utensils",
+    permissions: ["menu-pricing:read"],
+  },
+  {
+    label: "Reports",
+    href: "/reports",
+    icon: "BarChart3",
+    permissions: ["reports:read"],
+  },
+  {
+    label: "Offline Sync",
+    href: "/offline-sync",
+    icon: "CloudSync",
+    permissions: ["sync:read", "sync:submit"],
+  },
+  {
+    label: "Admin Settings",
+    href: "/admin",
+    icon: "Settings",
+    permissions: ["admin.users:read", "admin.roles:read", "admin.audit:read"],
+  },
+] satisfies Array<{
+  label: string;
+  href: string;
+  icon: IconName;
+  permissions: string[];
+}>;
+
+export function canAccessNavigationItem(
+  userPermissions: string[] | undefined,
+  item: (typeof navigation)[number],
+) {
+  return item.permissions.some((permission) =>
+    userPermissions?.includes(permission),
+  );
+}
 
 export const dashboard: Screen = {
   slug: "",

@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   ApiClient,
   TOKEN_KEY,
+  type AuthenticatedUser,
   type MasterDataRecord,
   type ReportCatalogItem,
   type ReportRun,
@@ -23,6 +24,7 @@ type ReportsState = {
   loading: boolean;
   locations: MasterDataRecord[];
   runs: ReportRun[];
+  user: AuthenticatedUser | null;
 };
 
 type ReportForm = {
@@ -52,6 +54,7 @@ export function ReportsLivePage({ screen }: ReportsLivePageProps) {
     loading: true,
     locations: [],
     runs: [],
+    user: null,
   });
 
   useEffect(() => {
@@ -67,13 +70,15 @@ export function ReportsLivePage({ screen }: ReportsLivePageProps) {
           loading: false,
           locations: [],
           runs: [],
+          user: null,
         });
         return;
       }
 
       try {
         const client = new ApiClient(token);
-        const [catalog, locations, runs] = await Promise.all([
+        const [user, catalog, locations, runs] = await Promise.all([
+          client.currentUser(),
           client.reportCatalog(),
           client.masterData<MasterDataRecord>("locations"),
           client.reportRuns(),
@@ -88,6 +93,7 @@ export function ReportsLivePage({ screen }: ReportsLivePageProps) {
               (location) => location.active !== false,
             ),
             runs: runs.data,
+            user,
           });
           setForm((current) => ({
             ...current,
@@ -105,6 +111,7 @@ export function ReportsLivePage({ screen }: ReportsLivePageProps) {
             loading: false,
             locations: [],
             runs: [],
+            user: null,
           });
         }
       }
@@ -124,6 +131,7 @@ export function ReportsLivePage({ screen }: ReportsLivePageProps) {
   const selectedReport = state.catalog.find(
     (report) => report.key === form.reportKey,
   );
+  const canRunReports = hasPermission(state.user, "reports:run");
 
   async function refresh(client: ApiClient) {
     const runs = await client.reportRuns();
@@ -132,6 +140,15 @@ export function ReportsLivePage({ screen }: ReportsLivePageProps) {
 
   async function runReport(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+
+    if (!canRunReports) {
+      setState((current) => ({
+        ...current,
+        error: "You do not have permission to run reports.",
+      }));
+      return;
+    }
+
     setSaving(true);
 
     try {
@@ -234,7 +251,7 @@ export function ReportsLivePage({ screen }: ReportsLivePageProps) {
             Report
             <select
               className="h-10 rounded-md border border-og-line px-3 text-sm font-medium text-og-dark"
-              disabled={state.loading || saving}
+              disabled={state.loading || saving || !canRunReports}
               value={form.reportKey}
               onChange={(event) =>
                 setForm({ ...form, reportKey: event.target.value })
@@ -252,7 +269,7 @@ export function ReportsLivePage({ screen }: ReportsLivePageProps) {
             Location
             <select
               className="h-10 rounded-md border border-og-line px-3 text-sm font-medium text-og-dark"
-              disabled={state.loading || saving}
+              disabled={state.loading || saving || !canRunReports}
               value={form.locationId}
               onChange={(event) =>
                 setForm({ ...form, locationId: event.target.value })
@@ -269,13 +286,13 @@ export function ReportsLivePage({ screen }: ReportsLivePageProps) {
 
           <div className="grid gap-3 sm:grid-cols-2">
             <DateField
-              disabled={state.loading || saving}
+              disabled={state.loading || saving || !canRunReports}
               label="From"
               value={form.dateFrom}
               onChange={(dateFrom) => setForm({ ...form, dateFrom })}
             />
             <DateField
-              disabled={state.loading || saving}
+              disabled={state.loading || saving || !canRunReports}
               label="To"
               value={form.dateTo}
               onChange={(dateTo) => setForm({ ...form, dateTo })}
@@ -286,7 +303,7 @@ export function ReportsLivePage({ screen }: ReportsLivePageProps) {
             Item type
             <select
               className="h-10 rounded-md border border-og-line px-3 text-sm font-medium text-og-dark"
-              disabled={state.loading || saving}
+              disabled={state.loading || saving || !canRunReports}
               value={form.itemType}
               onChange={(event) =>
                 setForm({ ...form, itemType: event.target.value })
@@ -312,7 +329,12 @@ export function ReportsLivePage({ screen }: ReportsLivePageProps) {
 
           <button
             className="inline-flex h-10 w-fit items-center gap-2 rounded-md bg-og-green px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={state.loading || saving || state.catalog.length === 0}
+            disabled={
+              state.loading ||
+              saving ||
+              state.catalog.length === 0 ||
+              !canRunReports
+            }
             type="submit"
           >
             <Icon name="PlayCircle" size={18} />
@@ -497,6 +519,10 @@ function formatInteger(value: number) {
   return new Intl.NumberFormat("en-PH", { maximumFractionDigits: 0 }).format(
     value,
   );
+}
+
+function hasPermission(user: AuthenticatedUser | null, permission: string) {
+  return user?.permissions.includes(permission) ?? false;
 }
 
 function text(value: unknown) {

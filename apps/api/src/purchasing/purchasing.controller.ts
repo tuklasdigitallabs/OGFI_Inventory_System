@@ -147,7 +147,7 @@ export class PurchasingController {
   }
 
   @Get("receivings/:id")
-  @Permissions("purchasing.receivings:create")
+  @Permissions("purchasing.receivings:read")
   getReceiving(@Param("id") id: string) {
     return this.purchasingService.list("receivings.detail", { id });
   }

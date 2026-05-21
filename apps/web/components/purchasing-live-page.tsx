@@ -13,6 +13,7 @@ import type { Kpi, Screen } from "@/lib/screens";
 import {
   ApiClient,
   TOKEN_KEY,
+  type AuthenticatedUser,
   type MasterDataRecord,
   type PurchaseOrder,
   type PurchaseOrderLine,
@@ -153,6 +154,7 @@ export function PurchasingLivePage({ screen }: PurchasingLivePageProps) {
   const [loading, setLoading] = useState(true);
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
   const [resources, setResources] = useState<ResourceState>(emptyResources);
+  const [user, setUser] = useState<AuthenticatedUser | null>(null);
   const [poForm, setPoForm] = useState<PurchaseOrderForm>(() =>
     createPurchaseOrderForm(),
   );
@@ -168,7 +170,17 @@ export function PurchasingLivePage({ screen }: PurchasingLivePageProps) {
   const [tableError, setTableError] = useState<string | null>(null);
 
   const isReceiving = screen.slug === "receiving";
-  const showReceivingForm = isReceiving || selectedOrder !== null;
+  const canCreatePurchaseOrder = hasPermission(
+    user,
+    "purchasing.purchase-orders:create",
+  );
+  const canApprovePurchaseOrder = hasPermission(
+    user,
+    "purchasing.purchase-orders:approve",
+  );
+  const canReceiveGoods = hasPermission(user, "purchasing.receivings:create");
+  const showReceivingForm =
+    canReceiveGoods && (isReceiving || selectedOrder !== null);
 
   useEffect(() => {
     const status = normalizePurchaseOrderStatus(
@@ -226,6 +238,7 @@ export function PurchasingLivePage({ screen }: PurchasingLivePageProps) {
           suppliers: activeSuppliers,
           uoms: activeUoms,
         });
+        setUser(user);
         setOrders(purchaseOrders.data);
         setPoForm((current) => ({
           ...current,
@@ -690,7 +703,7 @@ export function PurchasingLivePage({ screen }: PurchasingLivePageProps) {
           setForm={setReceivingForm}
           submit={saveReceiving}
         />
-      ) : (
+      ) : !isReceiving && canCreatePurchaseOrder ? (
         <PurchaseOrderForm
           disabled={saving || loading}
           form={poForm}
@@ -698,9 +711,19 @@ export function PurchasingLivePage({ screen }: PurchasingLivePageProps) {
           setForm={setPoForm}
           submit={savePurchaseOrder}
         />
-      )}
+      ) : null}
+
+      {isReceiving && !canReceiveGoods ? (
+        <div className="rounded-md border border-og-line bg-white px-4 py-3 text-sm font-semibold text-og-gray">
+          You can review purchase orders, but posting receiving requires the
+          receiving permission.
+        </div>
+      ) : null}
 
       <PurchaseOrderTable
+        canApprove={canApprovePurchaseOrder}
+        canCreate={canCreatePurchaseOrder}
+        canReceive={canReceiveGoods}
         edit={(order) => loadOrderForEdit(order.id)}
         filters={poFilters}
         loading={loading}
@@ -1299,6 +1322,9 @@ function ReceivingHistory({ receivings }: { receivings: Receiving[] }) {
 }
 
 type PurchaseOrderTableProps = {
+  canApprove: boolean;
+  canCreate: boolean;
+  canReceive: boolean;
   edit: (order: PurchaseOrder) => void;
   filters: PurchaseOrderFilters;
   loading: boolean;
@@ -1315,6 +1341,9 @@ type PurchaseOrderTableProps = {
 };
 
 function PurchaseOrderTable({
+  canApprove,
+  canCreate,
+  canReceive,
   edit,
   filters,
   loading,
@@ -1449,7 +1478,7 @@ function PurchaseOrderTable({
                         </td>
                         <td className="og-table-cell">
                           <div className="flex justify-end gap-1">
-                            {order.status === "DRAFT" ? (
+                            {order.status === "DRAFT" && canCreate ? (
                               <>
                                 <IconButton
                                   disabled={saving}
@@ -1465,7 +1494,8 @@ function PurchaseOrderTable({
                                 />
                               </>
                             ) : null}
-                            {order.status === "PENDING_APPROVAL" ? (
+                            {order.status === "PENDING_APPROVAL" &&
+                            canApprove ? (
                               <>
                                 <IconButton
                                   disabled={saving}
@@ -1485,7 +1515,7 @@ function PurchaseOrderTable({
                             ) : null}
                             {["APPROVED", "PARTIALLY_RECEIVED"].includes(
                               order.status,
-                            ) ? (
+                            ) && canReceive ? (
                               <IconButton
                                 disabled={saving}
                                 icon="PackageCheck"
@@ -1493,7 +1523,8 @@ function PurchaseOrderTable({
                                 onClick={() => receive(order)}
                               />
                             ) : null}
-                            {order.status === "PARTIALLY_RECEIVED" ? (
+                            {order.status === "PARTIALLY_RECEIVED" &&
+                            canApprove ? (
                               <IconButton
                                 disabled={saving}
                                 icon="LockKeyhole"
@@ -2071,6 +2102,10 @@ function itemBaseUomId(item: MasterDataRecord | undefined) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function hasPermission(user: AuthenticatedUser | null, permission: string) {
+  return user?.permissions.includes(permission) ?? false;
 }
 
 function text(value: unknown) {

@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   ApiClient,
   TOKEN_KEY,
+  type AuthenticatedUser,
   type SyncBatchRecord,
   type SyncBootstrap,
   type SyncEventRecord,
@@ -59,6 +60,8 @@ export function OfflineSyncLivePage({ screen }: OfflineSyncLivePageProps) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<SyncStatus | null>(null);
+  const [user, setUser] = useState<AuthenticatedUser | null>(null);
+  const canSubmitSync = user?.permissions.includes("sync:submit") ?? false;
 
   useEffect(() => {
     function refreshQueue() {
@@ -97,14 +100,21 @@ export function OfflineSyncLivePage({ screen }: OfflineSyncLivePageProps) {
 
       try {
         const client = new ApiClient(token);
-        const [bootstrapResponse, statusResponse, batchesResponse] =
+        const [
+          currentUser,
+          bootstrapResponse,
+          statusResponse,
+          batchesResponse,
+        ] =
           await Promise.all([
+            client.currentUser(),
             client.syncBootstrap(),
             client.syncStatus(),
             client.syncBatches(),
           ]);
 
         if (!cancelled) {
+          setUser(currentUser);
           setBootstrap(bootstrapResponse.data);
           setStatus(statusResponse.data);
           setBatches(batchesResponse.data);
@@ -172,6 +182,11 @@ export function OfflineSyncLivePage({ screen }: OfflineSyncLivePageProps) {
   async function addLocalEvent(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
+    if (!canSubmitSync) {
+      setError("You do not have permission to queue offline sync events.");
+      return;
+    }
+
     if (!form.locationId || !form.deviceId || !form.itemId) {
       setError("Select a location, device, and item before queuing an event.");
       return;
@@ -232,6 +247,11 @@ export function OfflineSyncLivePage({ screen }: OfflineSyncLivePageProps) {
   }
 
   async function submitQueue() {
+    if (!canSubmitSync) {
+      setError("You do not have permission to submit offline sync batches.");
+      return;
+    }
+
     if (!form.locationId || !form.deviceId) {
       setError("Select a location and device before submitting the queue.");
       return;
@@ -372,7 +392,7 @@ export function OfflineSyncLivePage({ screen }: OfflineSyncLivePageProps) {
 
         <button
           className="inline-flex h-10 items-center gap-2 rounded-md bg-og-green px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-          disabled={loading || saving}
+          disabled={loading || saving || !canSubmitSync}
           type="button"
           onClick={submitQueue}
         >
@@ -405,7 +425,7 @@ export function OfflineSyncLivePage({ screen }: OfflineSyncLivePageProps) {
           </div>
 
           <SelectField
-            disabled={loading || saving}
+            disabled={loading || saving || !canSubmitSync}
             label="Location"
             value={form.locationId}
             options={
@@ -423,7 +443,9 @@ export function OfflineSyncLivePage({ screen }: OfflineSyncLivePageProps) {
             }
           />
           <SelectField
-            disabled={loading || saving || deviceOptions.length === 0}
+            disabled={
+              loading || saving || !canSubmitSync || deviceOptions.length === 0
+            }
             label="Registered device"
             value={form.deviceId}
             options={deviceOptions.map((device) => ({
@@ -433,7 +455,7 @@ export function OfflineSyncLivePage({ screen }: OfflineSyncLivePageProps) {
             onChange={(deviceId) => setForm({ ...form, deviceId })}
           />
           <SelectField
-            disabled={loading || saving}
+            disabled={loading || saving || !canSubmitSync}
             label="Event type"
             value={form.eventType}
             options={
@@ -453,7 +475,7 @@ export function OfflineSyncLivePage({ screen }: OfflineSyncLivePageProps) {
           ) : null}
 
           <SelectField
-            disabled={loading || saving}
+            disabled={loading || saving || !canSubmitSync}
             label="Item"
             value={form.itemId}
             options={
@@ -467,7 +489,7 @@ export function OfflineSyncLivePage({ screen }: OfflineSyncLivePageProps) {
 
           {form.eventType === "ADJUSTMENT" ? (
             <SelectField
-              disabled={loading || saving}
+              disabled={loading || saving || !canSubmitSync}
               label="Adjustment direction"
               value={form.adjustmentDirection}
               options={[
@@ -485,7 +507,7 @@ export function OfflineSyncLivePage({ screen }: OfflineSyncLivePageProps) {
 
           <div className="grid gap-3 sm:grid-cols-2">
             <TextField
-              disabled={loading || saving}
+              disabled={loading || saving || !canSubmitSync}
               label={`${selectedEvent.qtyLabel}${selectedItem ? ` (${selectedItem.baseUomCode})` : ""}`}
               type="number"
               value={form.qty}
@@ -499,7 +521,7 @@ export function OfflineSyncLivePage({ screen }: OfflineSyncLivePageProps) {
 
           {form.eventType === "WASTAGE" ? (
             <SelectField
-              disabled={loading || saving}
+              disabled={loading || saving || !canSubmitSync}
               label="Reason"
               value={form.reasonCodeId}
               options={wastageReasons(bootstrap).map((reason) => ({
@@ -513,7 +535,7 @@ export function OfflineSyncLivePage({ screen }: OfflineSyncLivePageProps) {
           <div className="grid gap-3 sm:grid-cols-2">
             {form.eventType === "ADJUSTMENT" ? (
               <TextField
-                disabled={loading || saving}
+                disabled={loading || saving || !canSubmitSync}
                 label="Unit cost"
                 type="number"
                 value={form.unitCostAtTime}
@@ -523,7 +545,7 @@ export function OfflineSyncLivePage({ screen }: OfflineSyncLivePageProps) {
               />
             ) : null}
             <TextField
-              disabled={loading || saving}
+              disabled={loading || saving || !canSubmitSync}
               label="Business date"
               type="date"
               value={form.businessDate}
@@ -533,7 +555,7 @@ export function OfflineSyncLivePage({ screen }: OfflineSyncLivePageProps) {
 
           {selectedEvent.showRemarks ? (
             <TextAreaField
-              disabled={loading || saving}
+              disabled={loading || saving || !canSubmitSync}
               label="Remarks"
               value={form.remarks}
               onChange={(remarks) => setForm({ ...form, remarks })}

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { ConnectionStatus } from "./connection-status";
 import type { AuthenticatedUser } from "@/lib/api-client";
 import { Icon } from "@/lib/icons";
-import { navigation } from "@/lib/screens";
+import { canAccessNavigationItem, navigation } from "@/lib/screens";
 
 type AppShellProps = {
   children: React.ReactNode;
@@ -13,6 +13,10 @@ type AppShellProps = {
 };
 
 export function AppShell({ children, currentUser, onLogout }: AppShellProps) {
+  const visibleNavigation = navigation.filter((item) =>
+    canAccessNavigationItem(currentUser?.permissions, item),
+  );
+
   return (
     <div className="min-h-screen bg-[#f7f8f5] text-og-dark">
       <aside className="fixed inset-y-0 left-0 z-20 hidden w-72 flex-col border-r border-black/20 bg-og-dark text-white lg:flex">
@@ -27,7 +31,7 @@ export function AppShell({ children, currentUser, onLogout }: AppShellProps) {
         </div>
 
         <nav className="flex-1 space-y-1 px-3 py-4">
-          {navigation.map((item) => (
+          {visibleNavigation.map((item) => (
             <Link
               className="flex items-center gap-3 rounded-md px-3 py-2 text-sm font-semibold text-white/80 hover:bg-white/10 hover:text-white"
               href={item.href}
@@ -91,7 +95,7 @@ export function AppShell({ children, currentUser, onLogout }: AppShellProps) {
             <ConnectionStatus variant="pills" />
           </div>
           <nav className="flex gap-2 overflow-x-auto border-t border-og-line px-4 py-2 lg:hidden">
-            {navigation.map((item) => (
+            {visibleNavigation.map((item) => (
               <Link
                 className="inline-flex shrink-0 items-center gap-2 rounded-md border border-og-line bg-white px-3 py-2 text-xs font-semibold text-og-dark"
                 href={item.href}

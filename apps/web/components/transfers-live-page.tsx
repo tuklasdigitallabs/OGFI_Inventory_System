@@ -4,6 +4,7 @@ import { Fragment, FormEvent, useEffect, useMemo, useState } from "react";
 import {
   ApiClient,
   TOKEN_KEY,
+  type AuthenticatedUser,
   type MasterDataRecord,
   type StockOnHandRow,
   type Transfer,
@@ -79,6 +80,11 @@ export function TransfersLivePage({ screen }: TransfersLivePageProps) {
   const [overdueOnly, setOverdueOnly] = useState(false);
   const [statusFilter, setStatusFilter] = useState("");
   const [transfers, setTransfers] = useState<Transfer[]>([]);
+  const [user, setUser] = useState<AuthenticatedUser | null>(null);
+  const canCreate = hasPermission(user, "transfers:create");
+  const canApprove = hasPermission(user, "transfers:approve");
+  const canDispatch = hasPermission(user, "transfers:dispatch");
+  const canReceive = hasPermission(user, "transfers:receive");
 
   const kpis = useMemo<Kpi[]>(
     () => [
@@ -138,13 +144,16 @@ export function TransfersLivePage({ screen }: TransfersLivePageProps) {
 
       try {
         const client = new ApiClient(token);
-        const [locations, items, transferResponse] = await Promise.all([
-          client.masterData<MasterDataRecord>("locations"),
-          client.masterData<MasterDataRecord>("items"),
-          client.transfers(),
-        ]);
+        const [currentUser, locations, items, transferResponse] =
+          await Promise.all([
+            client.currentUser(),
+            client.masterData<MasterDataRecord>("locations"),
+            client.masterData<MasterDataRecord>("items"),
+            client.transfers(),
+          ]);
 
         if (!cancelled) {
+          setUser(currentUser);
           setResources({
             items: items.data.filter((item) => item.active !== false),
             locations: locations.data.filter(
@@ -452,7 +461,7 @@ export function TransfersLivePage({ screen }: TransfersLivePageProps) {
           setActionForm={setActionForm}
           submit={submitActionForm}
         />
-      ) : (
+      ) : canCreate ? (
         <form className="og-card flex flex-col gap-4" onSubmit={createTransfer}>
           <div className="grid gap-4 md:grid-cols-5">
             <ReadOnlyField label="Transfer Ref" value="Auto-generated" />
@@ -544,9 +553,12 @@ export function TransfersLivePage({ screen }: TransfersLivePageProps) {
             Create Transfer
           </button>
         </form>
-      )}
+      ) : null}
 
       <TransfersTable
+        canApprove={canApprove}
+        canDispatch={canDispatch}
+        canReceive={canReceive}
         loading={loading}
         saving={saving}
         transfers={filteredTransfers}
@@ -911,12 +923,18 @@ function DraftTransferLines({
 
 function TransfersTable({
   approve,
+  canApprove,
+  canDispatch,
+  canReceive,
   loading,
   saving,
   startAction,
   transfers,
 }: {
   approve: (transfer: Transfer) => void;
+  canApprove: boolean;
+  canDispatch: boolean;
+  canReceive: boolean;
   loading: boolean;
   saving: boolean;
   startAction: (
@@ -1002,7 +1020,7 @@ function TransfersTable({
                         </td>
                         <td className="og-table-cell">
                           <div className="flex justify-end gap-1">
-                            {transfer.status === "DRAFT" ? (
+                            {transfer.status === "DRAFT" && canApprove ? (
                               <IconButton
                                 disabled={saving}
                                 icon="Check"
@@ -1010,7 +1028,7 @@ function TransfersTable({
                                 onClick={() => approve(transfer)}
                               />
                             ) : null}
-                            {transfer.status === "APPROVED" ? (
+                            {transfer.status === "APPROVED" && canDispatch ? (
                               <IconButton
                                 disabled={saving}
                                 icon="Truck"
@@ -1020,7 +1038,7 @@ function TransfersTable({
                                 }
                               />
                             ) : null}
-                            {transfer.status === "DISPATCHED" ? (
+                            {transfer.status === "DISPATCHED" && canReceive ? (
                               <IconButton
                                 disabled={saving}
                                 icon="PackageCheck"
@@ -1028,7 +1046,8 @@ function TransfersTable({
                                 onClick={() => startAction(transfer, "receive")}
                               />
                             ) : null}
-                            {transfer.status === "VARIANCE_REVIEW" ? (
+                            {transfer.status === "VARIANCE_REVIEW" &&
+                            canApprove ? (
                               <IconButton
                                 disabled={saving}
                                 icon="Scale"
@@ -1348,6 +1367,10 @@ function formatDate(value: string | null) {
     month: "short",
     year: "numeric",
   }).format(new Date(value));
+}
+
+function hasPermission(user: AuthenticatedUser | null, permission: string) {
+  return user?.permissions.includes(permission) ?? false;
 }
 
 function text(value: unknown) {

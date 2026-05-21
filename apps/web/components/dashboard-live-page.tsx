@@ -82,7 +82,9 @@ export function DashboardLivePage({ screen }: DashboardLivePageProps) {
               client.inventoryMovements(locationId, 10),
             ),
           ),
-          client.transfers(),
+          client
+            .transfers()
+            .catch(() => ({ resource: "transfers", data: [] })),
           client
             .purchaseOrders()
             .catch(() => ({ resource: "purchase-orders", data: [] })),
