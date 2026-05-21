@@ -1,5 +1,10 @@
-INSERT INTO "permissions" ("module", "action", "description")
-VALUES ('purchasing.receivings', 'read', 'View supplier receiving records')
+INSERT INTO "permissions" ("id", "module", "action", "description")
+VALUES (
+  '5f3b1d51-d0f9-4ef8-9e06-4f0906a9b8b7',
+  'purchasing.receivings',
+  'read',
+  'View supplier receiving records'
+)
 ON CONFLICT ("module", "action") DO UPDATE
 SET "description" = EXCLUDED."description";
 
