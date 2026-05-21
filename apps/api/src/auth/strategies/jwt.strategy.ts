@@ -39,11 +39,16 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException("Invalid or inactive user.");
     }
 
+    if (user.restrictedAt || user.lockedAt) {
+      throw new UnauthorizedException("Account requires admin review.");
+    }
+
     return {
       id: user.id,
       email: user.email,
       username: user.username,
       fullName: user.fullName,
+      mustChangePassword: user.mustChangePassword,
       role: {
         id: user.role.id,
         code: user.role.code,

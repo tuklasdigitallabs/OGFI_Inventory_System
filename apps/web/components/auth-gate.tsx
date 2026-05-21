@@ -54,6 +54,9 @@ export function AuthGate({ children }: AuthGateProps) {
   const [offlinePinStatus, setOfflinePinStatus] =
     useState<OfflinePinStatus | null>(null);
   const [password, setPassword] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<AuthenticatedUser | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -165,7 +168,7 @@ export function AuthGate({ children }: AuthGateProps) {
       });
 
       if (!response.ok) {
-        throw new Error("Invalid username or password.");
+        throw new Error(await loginErrorMessage(response));
       }
 
       const result = (await response.json()) as LoginResponse;
@@ -175,6 +178,8 @@ export function AuthGate({ children }: AuthGateProps) {
       window.localStorage.setItem(TOKEN_KEY, result.accessToken);
       setToken(result.accessToken);
       setUser(result.user);
+      setCurrentPassword(result.user.mustChangePassword ? password : "");
+      setPassword("");
       setOfflinePinStatus(pinStatus);
       setOfflinePinMode(null);
     } catch (loginError) {
@@ -199,6 +204,44 @@ export function AuthGate({ children }: AuthGateProps) {
     setOfflinePinStatus(null);
     setOfflinePinMode(null);
     setPassword("");
+    setCurrentPassword("");
+    setNewPassword("");
+    setConfirmPassword("");
+  }
+
+  async function submitPasswordChange(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError(null);
+    setLoading(true);
+
+    try {
+      if (!token) {
+        throw new Error("Sign in before changing password.");
+      }
+
+      if (newPassword !== confirmPassword) {
+        throw new Error("New password confirmation does not match.");
+      }
+
+      const updatedUser = await new ApiClient(token).changePassword(
+        currentPassword,
+        newPassword,
+      );
+      setUser(updatedUser);
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setPassword("");
+      setOfflinePinMode(offlinePinModeFor(offlinePinStatus));
+    } catch (passwordError) {
+      setError(
+        passwordError instanceof Error
+          ? passwordError.message
+          : "Unable to change password.",
+      );
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function submitOfflinePin(event: FormEvent<HTMLFormElement>) {
@@ -265,6 +308,76 @@ export function AuthGate({ children }: AuthGateProps) {
           />
           Loading session
         </div>
+      </div>
+    );
+  }
+
+  if (token && user?.mustChangePassword) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-[#f7f8f5] px-4 py-8 text-og-dark">
+        <form
+          className="w-full max-w-sm rounded-md border border-og-line bg-white p-5 shadow-sm"
+          onSubmit={submitPasswordChange}
+        >
+          <div className="mb-5 flex items-center gap-3">
+            <span className="grid h-10 w-10 place-items-center rounded-md bg-og-green font-poppins text-lg font-bold text-white">
+              OG
+            </span>
+            <div>
+              <h1 className="font-poppins text-xl font-semibold">
+                Change Password
+              </h1>
+              <p className="text-sm text-og-gray">
+                Set a new password to continue.
+              </p>
+            </div>
+          </div>
+
+          <label className="mb-3 block text-sm font-semibold">
+            Current password
+            <input
+              className="mt-1 h-11 w-full rounded-md border border-og-line px-3 text-sm outline-none focus:border-og-green"
+              onChange={(event) => setCurrentPassword(event.target.value)}
+              type="password"
+              value={currentPassword}
+            />
+          </label>
+
+          <label className="mb-3 block text-sm font-semibold">
+            New password
+            <input
+              className="mt-1 h-11 w-full rounded-md border border-og-line px-3 text-sm outline-none focus:border-og-green"
+              minLength={8}
+              onChange={(event) => setNewPassword(event.target.value)}
+              type="password"
+              value={newPassword}
+            />
+          </label>
+
+          <label className="block text-sm font-semibold">
+            Confirm new password
+            <input
+              className="mt-1 h-11 w-full rounded-md border border-og-line px-3 text-sm outline-none focus:border-og-green"
+              minLength={8}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+              type="password"
+              value={confirmPassword}
+            />
+          </label>
+
+          {error ? (
+            <p className="mt-3 text-sm font-semibold text-red-700">{error}</p>
+          ) : null}
+
+          <button
+            className="mt-5 inline-flex h-11 w-full items-center justify-center gap-2 rounded-md bg-og-green px-4 text-sm font-semibold text-white disabled:opacity-60"
+            disabled={loading}
+            type="submit"
+          >
+            <Icon name="KeyRound" size={18} />
+            Change password
+          </button>
+        </form>
       </div>
     );
   }
@@ -404,6 +517,20 @@ export function AuthGate({ children }: AuthGateProps) {
         : children}
     </>
   );
+}
+
+async function loginErrorMessage(response: Response) {
+  try {
+    const body = (await response.json()) as { message?: string | string[] };
+
+    if (Array.isArray(body.message)) {
+      return body.message.join(", ");
+    }
+
+    return body.message ?? "Invalid username or password.";
+  } catch {
+    return "Invalid username or password.";
+  }
 }
 
 function offlinePinModeFor(

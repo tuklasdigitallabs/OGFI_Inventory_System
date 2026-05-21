@@ -41,7 +41,6 @@ type UserForm = {
   fullName: string;
   id: string;
   locationIds: string[];
-  password: string;
   roleId: string;
   username: string;
 };
@@ -69,7 +68,6 @@ const emptyUserForm: UserForm = {
   fullName: "",
   id: "",
   locationIds: [],
-  password: "",
   roleId: "",
   username: "",
 };
@@ -241,7 +239,6 @@ export function AdminLivePage({ screen }: AdminLivePageProps) {
         roleId: userForm.roleId,
         active: userForm.active,
         locationIds: userForm.locationIds,
-        password: userForm.password || undefined,
       };
 
       if (userForm.id) {
@@ -400,10 +397,55 @@ export function AdminLivePage({ screen }: AdminLivePageProps) {
       fullName: user.fullName,
       id: user.id,
       locationIds: user.locationIds,
-      password: "",
       roleId: user.roleId,
       username: user.username,
     });
+  }
+
+  async function resetUserPassword(id: string) {
+    await runUserAction(
+      id,
+      (client, userId) => client.resetAdminUserPassword(userId),
+      "Unable to reset user password.",
+    );
+  }
+
+  async function unrestrictUser(id: string) {
+    await runUserAction(
+      id,
+      (client, userId) => client.unrestrictAdminUser(userId),
+      "Unable to unrestrict user.",
+    );
+  }
+
+  async function unlockUser(id: string) {
+    await runUserAction(
+      id,
+      (client, userId) => client.unlockAdminUser(userId),
+      "Unable to unlock user.",
+    );
+  }
+
+  async function runUserAction(
+    id: string,
+    action: (client: ApiClient, userId: string) => Promise<AdminUser>,
+    fallbackMessage: string,
+  ) {
+    setSaving(true);
+
+    try {
+      const client = await clientFromSession();
+      await action(client, id);
+      await refresh(client);
+      setState((current) => ({ ...current, error: null }));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : fallbackMessage,
+      }));
+    } finally {
+      setSaving(false);
+    }
   }
 
   function editDevice(device: SyncDevice) {
@@ -464,11 +506,14 @@ export function AdminLivePage({ screen }: AdminLivePageProps) {
             submit={submitUser}
           />
           <UsersTable
-            loading={state.loading}
-            saving={saving}
-            users={state.users}
             deactivateUser={deactivateUser}
             editUser={editUser}
+            loading={state.loading}
+            resetUserPassword={resetUserPassword}
+            saving={saving}
+            unrestrictUser={unrestrictUser}
+            unlockUser={unlockUser}
+            users={state.users}
           />
         </section>
       ) : null}
@@ -608,14 +653,9 @@ function UserEditor({
         value={form.username}
         onChange={(username) => setForm({ ...form, username })}
       />
-      <TextField
-        disabled={disabled}
-        label={form.id ? "New password" : "Password"}
-        required={!form.id}
-        type="password"
-        value={form.password}
-        onChange={(password) => setForm({ ...form, password })}
-      />
+      <p className="rounded-md border border-og-line bg-gray-50 px-3 py-2 text-xs font-semibold text-og-gray">
+        New and reset accounts use the temporary password onegourmetfoodsinc.
+      </p>
 
       <label className="flex flex-col gap-1 text-xs font-semibold text-og-gray">
         Role
@@ -727,13 +767,19 @@ function UsersTable({
   deactivateUser,
   editUser,
   loading,
+  resetUserPassword,
   saving,
+  unrestrictUser,
+  unlockUser,
   users,
 }: {
   deactivateUser: (id: string) => void;
   editUser: (user: AdminUser) => void;
   loading: boolean;
+  resetUserPassword: (id: string) => void;
   saving: boolean;
+  unrestrictUser: (id: string) => void;
+  unlockUser: (id: string) => void;
   users: AdminUser[];
 }) {
   return (
@@ -775,10 +821,22 @@ function UsersTable({
                       .join(", ") || "-"}
                   </td>
                   <td className="og-table-cell">
-                    <StatusBadge value={user.active ? "Active" : "Inactive"} />
+                    <div className="flex flex-col gap-1">
+                      <StatusBadge value={user.accountStatus} />
+                      {user.failedLoginCount > 0 ? (
+                        <span className="text-xs text-og-gray">
+                          Failed attempts: {user.failedLoginCount}/3
+                        </span>
+                      ) : null}
+                      {user.restrictionCount > 0 ? (
+                        <span className="text-xs text-og-gray">
+                          Restrictions today: {user.restrictionCount}/3
+                        </span>
+                      ) : null}
+                    </div>
                   </td>
                   <td className="og-table-cell">
-                    <div className="flex gap-1">
+                    <div className="flex flex-wrap gap-1">
                       <button
                         className="rounded-md p-2 text-og-gray hover:bg-green-50 hover:text-og-green"
                         disabled={saving}
@@ -787,6 +845,37 @@ function UsersTable({
                       >
                         <Icon name="Pencil" size={16} />
                       </button>
+                      <button
+                        className="rounded-md p-2 text-og-gray hover:bg-green-50 hover:text-og-green disabled:opacity-50"
+                        disabled={saving}
+                        title="Reset password"
+                        type="button"
+                        onClick={() => resetUserPassword(user.id)}
+                      >
+                        <Icon name="KeyRound" size={16} />
+                      </button>
+                      {user.restrictedAt ? (
+                        <button
+                          className="rounded-md p-2 text-og-gray hover:bg-green-50 hover:text-og-green disabled:opacity-50"
+                          disabled={saving || Boolean(user.lockedAt)}
+                          title="Unrestrict account"
+                          type="button"
+                          onClick={() => unrestrictUser(user.id)}
+                        >
+                          <Icon name="ShieldCheck" size={16} />
+                        </button>
+                      ) : null}
+                      {user.lockedAt ? (
+                        <button
+                          className="rounded-md p-2 text-og-gray hover:bg-green-50 hover:text-og-green disabled:opacity-50"
+                          disabled={saving}
+                          title="Unlock account"
+                          type="button"
+                          onClick={() => unlockUser(user.id)}
+                        >
+                          <Icon name="LockKeyhole" size={16} />
+                        </button>
+                      ) : null}
                       <button
                         className="rounded-md p-2 text-og-gray hover:bg-red-50 hover:text-og-error disabled:opacity-50"
                         disabled={saving || !user.active}

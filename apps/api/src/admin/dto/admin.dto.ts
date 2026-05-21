@@ -22,9 +22,10 @@ export class CreateAdminUserDto {
   @IsUUID()
   roleId!: string;
 
+  @IsOptional()
   @IsString()
   @MinLength(8)
-  password!: string;
+  password?: string;
 
   @IsOptional()
   @IsBoolean()

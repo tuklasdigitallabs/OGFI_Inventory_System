@@ -5,6 +5,7 @@ export interface AuthenticatedUser {
   email: string;
   username: string;
   fullName: string;
+  mustChangePassword: boolean;
   role: {
     id: string;
     code: RoleCode;

@@ -9,6 +9,7 @@ import { Prisma, RoleCode, User } from "@prisma/client";
 import * as bcrypt from "bcrypt";
 import { randomUUID } from "crypto";
 import { AuditService } from "../audit/audit.service";
+import { defaultTemporaryPassword } from "../auth/password-policy";
 import { AuthenticatedUser } from "../auth/types";
 import { PrismaService } from "../prisma/prisma.service";
 import {
@@ -86,7 +87,8 @@ export class AdminService {
           email: dto.email.trim().toLowerCase(),
           username: dto.username.trim(),
           fullName: dto.fullName.trim(),
-          passwordHash: await bcrypt.hash(dto.password, 12),
+          passwordHash: await bcrypt.hash(defaultTemporaryPassword, 12),
+          mustChangePassword: true,
           roleId: dto.roleId,
           active: dto.active ?? true,
           locationAccess: {
@@ -154,6 +156,7 @@ export class AdminService {
             passwordHash: dto.password
               ? await bcrypt.hash(dto.password, 12)
               : undefined,
+            mustChangePassword: dto.password ? true : undefined,
           },
           include: this.userInclude(),
         });
@@ -196,6 +199,107 @@ export class AdminService {
     });
 
     await this.auditService.record("admin", "users.deactivate", {
+      userId: user.id,
+      entityType: "User",
+      entityId: updated.id,
+      before: this.toAuditUser(before),
+      after: this.toAuditUser(updated),
+      ipAddress: metadata.ipAddress,
+      userAgent: metadata.userAgent,
+    });
+
+    return this.toUserResponse(updated);
+  }
+
+  async resetUserPassword(
+    id: string,
+    user: AuthenticatedUser,
+    metadata: RequestAuditMetadata = {},
+  ) {
+    const before = await this.findUser(id);
+    const updated = await this.prisma.user.update({
+      where: { id },
+      data: {
+        passwordHash: await bcrypt.hash(defaultTemporaryPassword, 12),
+        mustChangePassword: true,
+        failedLoginCount: 0,
+        lastFailedLoginAt: null,
+      },
+      include: this.userInclude(),
+    });
+
+    await this.auditService.record("admin", "users.reset-password", {
+      userId: user.id,
+      entityType: "User",
+      entityId: updated.id,
+      before: this.toAuditUser(before),
+      after: this.toAuditUser(updated),
+      ipAddress: metadata.ipAddress,
+      userAgent: metadata.userAgent,
+    });
+
+    return this.toUserResponse(updated);
+  }
+
+  async unrestrictUser(
+    id: string,
+    user: AuthenticatedUser,
+    metadata: RequestAuditMetadata = {},
+  ) {
+    const before = await this.findUser(id);
+
+    if (before.lockedAt) {
+      throw new BadRequestException(
+        "Unlock this account before unrestricting it.",
+      );
+    }
+
+    const updated = await this.prisma.user.update({
+      where: { id },
+      data: {
+        failedLoginCount: 0,
+        lastFailedLoginAt: null,
+        restrictedAt: null,
+        restrictedReason: null,
+      },
+      include: this.userInclude(),
+    });
+
+    await this.auditService.record("admin", "users.unrestrict", {
+      userId: user.id,
+      entityType: "User",
+      entityId: updated.id,
+      before: this.toAuditUser(before),
+      after: this.toAuditUser(updated),
+      ipAddress: metadata.ipAddress,
+      userAgent: metadata.userAgent,
+    });
+
+    return this.toUserResponse(updated);
+  }
+
+  async unlockUser(
+    id: string,
+    user: AuthenticatedUser,
+    metadata: RequestAuditMetadata = {},
+  ) {
+    const before = await this.findUser(id);
+    const updated = await this.prisma.user.update({
+      where: { id },
+      data: {
+        failedLoginCount: 0,
+        lastFailedLoginAt: null,
+        restrictedAt: null,
+        restrictedReason: null,
+        restrictionCount: 0,
+        restrictionWindowStart: null,
+        lockedAt: null,
+        lockReason: null,
+      },
+      include: this.userInclude(),
+    });
+
+    await this.auditService.record("admin", "users.unlock", {
       userId: user.id,
       entityType: "User",
       entityId: updated.id,
@@ -660,6 +764,15 @@ export class AdminService {
       username: user.username,
       fullName: user.fullName,
       active: user.active,
+      mustChangePassword: user.mustChangePassword,
+      failedLoginCount: user.failedLoginCount,
+      restrictedAt: user.restrictedAt?.toISOString() ?? null,
+      restrictedReason: user.restrictedReason,
+      restrictionCount: this.currentRestrictionCount(user),
+      restrictionWindowStart: user.restrictionWindowStart?.toISOString() ?? null,
+      lockedAt: user.lockedAt?.toISOString() ?? null,
+      lockReason: user.lockReason,
+      accountStatus: this.accountStatus(user),
       roleId: user.roleId,
       roleCode: user.role.code,
       roleName: user.role.name,
@@ -672,6 +785,37 @@ export class AdminService {
       createdAt: user.createdAt.toISOString(),
       updatedAt: user.updatedAt.toISOString(),
     };
+  }
+
+  private accountStatus(user: UserWithAccess) {
+    if (!user.active) {
+      return "Inactive";
+    }
+
+    if (user.lockedAt) {
+      return "Locked";
+    }
+
+    if (user.restrictedAt) {
+      return "Restricted";
+    }
+
+    if (user.mustChangePassword) {
+      return "Temporary Password";
+    }
+
+    return "Active";
+  }
+
+  private currentRestrictionCount(user: UserWithAccess) {
+    if (
+      !user.restrictionWindowStart ||
+      Date.now() - user.restrictionWindowStart.getTime() > 24 * 60 * 60 * 1000
+    ) {
+      return 0;
+    }
+
+    return user.restrictionCount;
   }
 
   private toSyncDeviceResponse(device: {

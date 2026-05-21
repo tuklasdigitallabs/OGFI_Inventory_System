@@ -10,6 +10,7 @@ export type AuthenticatedUser = {
   email: string;
   username: string;
   fullName: string;
+  mustChangePassword: boolean;
   role: {
     id: string;
     code: string;
@@ -378,6 +379,15 @@ export type AdminUser = {
   username: string;
   fullName: string;
   active: boolean;
+  mustChangePassword: boolean;
+  failedLoginCount: number;
+  restrictedAt: string | null;
+  restrictedReason: string | null;
+  restrictionCount: number;
+  restrictionWindowStart: string | null;
+  lockedAt: string | null;
+  lockReason: string | null;
+  accountStatus: string;
   roleId: string;
   roleCode: string;
   roleName: string;
@@ -883,6 +893,32 @@ export class ApiClient {
 
   deactivateAdminUser(id: string) {
     return this.request<AdminUser>(`/admin/users/${id}/deactivate`, {
+      method: "POST",
+    });
+  }
+
+  resetAdminUserPassword(id: string) {
+    return this.request<AdminUser>(`/admin/users/${id}/reset-password`, {
+      method: "POST",
+    });
+  }
+
+  unrestrictAdminUser(id: string) {
+    return this.request<AdminUser>(`/admin/users/${id}/unrestrict`, {
+      method: "POST",
+    });
+  }
+
+  unlockAdminUser(id: string) {
+    return this.request<AdminUser>(`/admin/users/${id}/unlock`, {
+      method: "POST",
+    });
+  }
+
+  changePassword(currentPassword: string, newPassword: string) {
+    return this.request<AuthenticatedUser>("/auth/change-password", {
+      body: JSON.stringify({ currentPassword, newPassword }),
+      headers: { "Content-Type": "application/json" },
       method: "POST",
     });
   }

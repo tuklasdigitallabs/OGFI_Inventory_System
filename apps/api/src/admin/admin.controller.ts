@@ -76,6 +76,48 @@ export class AdminController {
     );
   }
 
+  @Post("users/:id/reset-password")
+  @Permissions("admin.users:update")
+  resetUserPassword(
+    @Param("id") id: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: Request,
+  ) {
+    return this.adminService.resetUserPassword(
+      id,
+      user,
+      this.auditMetadata(request),
+    );
+  }
+
+  @Post("users/:id/unrestrict")
+  @Permissions("admin.users:update")
+  unrestrictUser(
+    @Param("id") id: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: Request,
+  ) {
+    return this.adminService.unrestrictUser(
+      id,
+      user,
+      this.auditMetadata(request),
+    );
+  }
+
+  @Post("users/:id/unlock")
+  @Permissions("admin.users:update")
+  unlockUser(
+    @Param("id") id: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: Request,
+  ) {
+    return this.adminService.unlockUser(
+      id,
+      user,
+      this.auditMetadata(request),
+    );
+  }
+
   @Get("roles")
   @Permissions("admin.roles:read")
   listRoles() {

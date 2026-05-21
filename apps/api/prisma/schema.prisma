@@ -141,6 +141,15 @@ model User {
   passwordHash                           String
   fullName                               String
   active                                 Boolean                  @default(true)
+  mustChangePassword                     Boolean                  @default(false)
+  failedLoginCount                       Int                      @default(0)
+  lastFailedLoginAt                      DateTime?
+  restrictedAt                           DateTime?
+  restrictedReason                       String?
+  restrictionCount                       Int                      @default(0)
+  restrictionWindowStart                 DateTime?
+  lockedAt                               DateTime?
+  lockReason                             String?
   roleId                                 String                   @db.Uuid
   role                                   Role                     @relation(fields: [roleId], references: [id])
   locationAccess                         UserLocationAccess[]

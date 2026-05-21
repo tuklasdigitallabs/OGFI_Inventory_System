@@ -1,7 +1,7 @@
 import {
   BadRequestException,
+  ForbiddenException,
   HttpException,
-  HttpStatus,
   Injectable,
   UnauthorizedException,
 } from "@nestjs/common";
@@ -13,7 +13,13 @@ import { deriveKey } from "altcha-lib/algorithms/pbkdf2";
 import * as bcrypt from "bcrypt";
 import { AuditService } from "../audit/audit.service";
 import { PrismaService } from "../prisma/prisma.service";
-import { LoginDto, OfflinePinDto } from "./dto/login.dto";
+import { ChangePasswordDto, LoginDto, OfflinePinDto } from "./dto/login.dto";
+import {
+  defaultTemporaryPassword,
+  maxDailyRestrictions,
+  maxFailedLoginAttempts,
+  restrictionWindowMs,
+} from "./password-policy";
 import { AuthenticatedUser } from "./types";
 
 interface RequestAuditMetadata {
@@ -21,16 +27,6 @@ interface RequestAuditMetadata {
   userAgent?: string;
 }
 
-type LoginAttempt = {
-  count: number;
-  lockedUntil: number;
-  windowStartedAt: number;
-};
-
-const loginAttempts = new Map<string, LoginAttempt>();
-const loginWindowMs = 15 * 60 * 1000;
-const loginMaxAttempts = 5;
-const lockoutMs = 15 * 60 * 1000;
 const offlinePinSettingKey = "offline_pin_policy";
 
 type OfflinePinSettingValue = {
@@ -72,7 +68,6 @@ export class AuthService {
       throw new BadRequestException("Provide identifier, email, or username.");
     }
 
-    this.assertCanAttemptLogin(identifier, metadata);
     await this.verifyAltchaPayload(dto.altcha);
 
     const user = await this.prisma.user.findFirst({
@@ -93,11 +88,7 @@ export class AuthService {
       },
     });
 
-    if (
-      !user?.active ||
-      !(await bcrypt.compare(dto.password, user.passwordHash))
-    ) {
-      this.recordFailedLoginAttempt(identifier, metadata);
+    if (!user) {
       await this.auditService.record("auth", "login.failed", {
         after: { identifier },
         ipAddress: metadata.ipAddress,
@@ -106,7 +97,33 @@ export class AuthService {
       throw new UnauthorizedException("Invalid credentials.");
     }
 
-    this.clearLoginAttempts(identifier, metadata);
+    this.assertAccountCanLogin(user);
+
+    if (!(await bcrypt.compare(dto.password, user.passwordHash))) {
+      await this.recordFailedLoginAttempt(user, metadata);
+      throw new UnauthorizedException("Invalid credentials.");
+    }
+
+    const authenticatedUser = await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        failedLoginCount: 0,
+        lastFailedLoginAt: null,
+      },
+      include: {
+        role: {
+          include: {
+            permissions: {
+              include: {
+                permission: true,
+              },
+            },
+          },
+        },
+        locationAccess: true,
+      },
+    });
+
     await this.auditService.record("auth", "login.succeeded", {
       userId: user.id,
       ipAddress: metadata.ipAddress,
@@ -125,85 +142,82 @@ export class AuthService {
       accessToken,
       tokenType: "Bearer",
       expiresIn: this.config.get<string>("JWT_ACCESS_TTL") ?? "15m",
-      user: this.toAuthenticatedUser(user),
+      user: this.toAuthenticatedUser(authenticatedUser),
     };
   }
 
-  private assertCanAttemptLogin(
-    identifier: string,
-    metadata: RequestAuditMetadata,
-  ) {
-    const key = this.loginAttemptKey(identifier, metadata);
-    const attempt = loginAttempts.get(key);
-
-    if (!attempt) {
-      return;
+  private assertAccountCanLogin(user: User) {
+    if (!user.active) {
+      throw new ForbiddenException("Account is inactive.");
     }
 
-    if (attempt.lockedUntil > Date.now()) {
+    if (user.lockedAt) {
       throw new HttpException(
-        "Too many failed login attempts. Try again later.",
-        HttpStatus.TOO_MANY_REQUESTS,
+        "Account is locked. Ask an admin to unlock it.",
+        423,
       );
     }
 
-    if (Date.now() - attempt.windowStartedAt > loginWindowMs) {
-      loginAttempts.delete(key);
+    if (user.restrictedAt) {
+      throw new HttpException(
+        "Account is restricted. Ask an admin to unrestrict it.",
+        423,
+      );
     }
   }
 
-  private async verifyAltchaPayload(payload: string) {
-    let decoded: {
-      challenge: Parameters<typeof verifySolution>[0]["challenge"];
-      solution: Parameters<typeof verifySolution>[0]["solution"];
-    };
+  private async recordFailedLoginAttempt(
+    user: User,
+    metadata: RequestAuditMetadata,
+  ) {
+    const failedLoginCount = user.failedLoginCount + 1;
+    const shouldRestrict = failedLoginCount >= maxFailedLoginAttempts;
+    const now = new Date();
+    const windowStart = user.restrictionWindowStart;
+    const isSameWindow =
+      windowStart &&
+      now.getTime() - windowStart.getTime() <= restrictionWindowMs;
+    const restrictionCount = shouldRestrict
+      ? isSameWindow
+        ? user.restrictionCount + 1
+        : 1
+      : user.restrictionCount;
+    const shouldLock =
+      shouldRestrict && restrictionCount >= maxDailyRestrictions;
 
-    try {
-      decoded = JSON.parse(Buffer.from(payload, "base64").toString("utf8"));
-    } catch {
-      throw new UnauthorizedException("CAPTCHA verification failed.");
-    }
-
-    const result = await verifySolution({
-      hmacSignatureSecret: this.altchaSecret(),
-      deriveKey,
-      ...decoded,
+    const updated = await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        failedLoginCount: shouldRestrict ? 0 : failedLoginCount,
+        lastFailedLoginAt: now,
+        restrictedAt: shouldRestrict ? now : undefined,
+        restrictedReason: shouldRestrict
+          ? `${maxFailedLoginAttempts} incorrect login attempts.`
+          : undefined,
+        restrictionCount,
+        restrictionWindowStart: shouldRestrict
+          ? isSameWindow
+            ? windowStart
+            : now
+          : user.restrictionWindowStart,
+        lockedAt: shouldLock ? now : undefined,
+        lockReason: shouldLock
+          ? `${maxDailyRestrictions} account restrictions within 24 hours.`
+          : undefined,
+      },
     });
 
-    if (!result.verified) {
-      throw new UnauthorizedException("CAPTCHA verification failed.");
-    }
-  }
-
-  private recordFailedLoginAttempt(
-    identifier: string,
-    metadata: RequestAuditMetadata,
-  ) {
-    const key = this.loginAttemptKey(identifier, metadata);
-    const existing = loginAttempts.get(key);
-    const attempt =
-      existing && Date.now() - existing.windowStartedAt <= loginWindowMs
-        ? existing
-        : { count: 0, lockedUntil: 0, windowStartedAt: Date.now() };
-
-    attempt.count += 1;
-
-    if (attempt.count >= loginMaxAttempts) {
-      attempt.lockedUntil = Date.now() + lockoutMs;
-    }
-
-    loginAttempts.set(key, attempt);
-  }
-
-  private clearLoginAttempts(
-    identifier: string,
-    metadata: RequestAuditMetadata,
-  ) {
-    loginAttempts.delete(this.loginAttemptKey(identifier, metadata));
-  }
-
-  private loginAttemptKey(identifier: string, metadata: RequestAuditMetadata) {
-    return `${metadata.ipAddress ?? "unknown"}:${identifier.toLowerCase()}`;
+    await this.auditService.record("auth", "login.failed", {
+      userId: user.id,
+      after: {
+        failedLoginCount: updated.failedLoginCount,
+        lockedAt: updated.lockedAt,
+        restrictedAt: updated.restrictedAt,
+        restrictionCount: updated.restrictionCount,
+      },
+      ipAddress: metadata.ipAddress,
+      userAgent: metadata.userAgent,
+    });
   }
 
   private altchaSecret() {
@@ -236,6 +250,81 @@ export class AuthService {
 
   currentUser(user: AuthenticatedUser) {
     return user;
+  }
+
+  async changePassword(
+    dto: ChangePasswordDto,
+    user: AuthenticatedUser,
+    metadata: RequestAuditMetadata = {},
+  ) {
+    if (dto.newPassword === defaultTemporaryPassword) {
+      throw new BadRequestException(
+        "Choose a password different from the temporary password.",
+      );
+    }
+
+    const existing = await this.prisma.user.findUnique({
+      where: { id: user.id },
+    });
+
+    if (!existing?.active) {
+      throw new UnauthorizedException("Invalid or inactive user.");
+    }
+
+    if (!(await bcrypt.compare(dto.currentPassword, existing.passwordHash))) {
+      throw new UnauthorizedException("Current password is incorrect.");
+    }
+
+    const updated = await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        mustChangePassword: false,
+        passwordHash: await bcrypt.hash(dto.newPassword, 12),
+      },
+      include: {
+        role: {
+          include: {
+            permissions: {
+              include: {
+                permission: true,
+              },
+            },
+          },
+        },
+        locationAccess: true,
+      },
+    });
+
+    await this.auditService.record("auth", "password.change", {
+      userId: user.id,
+      ipAddress: metadata.ipAddress,
+      userAgent: metadata.userAgent,
+    });
+
+    return this.toAuthenticatedUser(updated);
+  }
+
+  private async verifyAltchaPayload(payload: string) {
+    let decoded: {
+      challenge: Parameters<typeof verifySolution>[0]["challenge"];
+      solution: Parameters<typeof verifySolution>[0]["solution"];
+    };
+
+    try {
+      decoded = JSON.parse(Buffer.from(payload, "base64").toString("utf8"));
+    } catch {
+      throw new UnauthorizedException("CAPTCHA verification failed.");
+    }
+
+    const result = await verifySolution({
+      hmacSignatureSecret: this.altchaSecret(),
+      deriveKey,
+      ...decoded,
+    });
+
+    if (!result.verified) {
+      throw new UnauthorizedException("CAPTCHA verification failed.");
+    }
   }
 
   async offlinePinStatus() {
@@ -319,6 +408,7 @@ export class AuthService {
       email: user.email,
       username: user.username,
       fullName: user.fullName,
+      mustChangePassword: user.mustChangePassword,
       role: {
         id: user.role.id,
         code: user.role.code,

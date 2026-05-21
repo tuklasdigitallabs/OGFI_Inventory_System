@@ -16,6 +16,7 @@ const user: AuthenticatedUser = {
   email: "admin@example.com",
   username: "admin",
   fullName: "Admin User",
+  mustChangePassword: false,
   role: {
     id: "22222222-2222-2222-2222-222222222222",
     code: RoleCode.ADMIN,
