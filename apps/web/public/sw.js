@@ -1,4 +1,4 @@
-const CACHE_NAME = "ogfi-app-shell-v1";
+const CACHE_NAME = "ogfi-app-shell-v2";
 const APP_SHELL = [
   "/",
   "/master-data",
@@ -44,6 +44,11 @@ self.addEventListener("fetch", (event) => {
   }
 
   const url = new URL(request.url);
+
+  if (url.pathname === "/api/auth/altcha-challenge") {
+    event.respondWith(fetch(request));
+    return;
+  }
 
   if (request.mode === "navigate") {
     event.respondWith(
