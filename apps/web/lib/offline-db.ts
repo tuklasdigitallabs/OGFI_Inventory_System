@@ -95,6 +95,12 @@ export async function setCachedValue<T>(key: string, value: T) {
   );
 }
 
+export async function deleteCachedValue(key: string) {
+  await store<undefined>(cacheStore, "readwrite", (objectStore) =>
+    objectStore.delete(key),
+  );
+}
+
 export async function getOfflineQueue() {
   await migrateLocalStorageQueue();
 

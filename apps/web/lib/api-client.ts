@@ -1,4 +1,8 @@
-import { getCachedValue, setCachedValue } from "./offline-db";
+import {
+  deleteCachedValue,
+  getCachedValue,
+  setCachedValue,
+} from "./offline-db";
 
 export const API_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3000/api";
@@ -450,6 +454,8 @@ type ApiMutationResponse<T> = {
   data: T;
 };
 
+const referenceCacheTtlMs = 5 * 60 * 1000;
+
 export class ApiClient {
   constructor(private readonly accessToken: string) {}
 
@@ -524,18 +530,24 @@ export class ApiClient {
   }
 
   masterData<T extends MasterDataRecord>(resource: MasterDataResource) {
-    return this.request<ApiListResponse<T>>(`/admin/${resource}?take=500`);
+    return this.request<ApiListResponse<T>>(`/admin/${resource}?take=500`, {
+      cacheTtlMs: referenceCacheTtlMs,
+    });
   }
 
   createMasterData<T extends MasterDataRecord>(
     resource: MasterDataResource,
     payload: Record<string, unknown>,
   ) {
-    return this.request<ApiMutationResponse<T>>(`/admin/${resource}`, {
-      body: JSON.stringify(payload),
-      headers: { "Content-Type": "application/json" },
-      method: "POST",
-    });
+    return this.mutateMasterData<ApiMutationResponse<T>>(
+      resource,
+      `/admin/${resource}`,
+      {
+        body: JSON.stringify(payload),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      },
+    );
   }
 
   updateMasterData<T extends MasterDataRecord>(
@@ -543,18 +555,23 @@ export class ApiClient {
     id: string,
     payload: Record<string, unknown>,
   ) {
-    return this.request<ApiMutationResponse<T>>(`/admin/${resource}/${id}`, {
-      body: JSON.stringify(payload),
-      headers: { "Content-Type": "application/json" },
-      method: "PATCH",
-    });
+    return this.mutateMasterData<ApiMutationResponse<T>>(
+      resource,
+      `/admin/${resource}/${id}`,
+      {
+        body: JSON.stringify(payload),
+        headers: { "Content-Type": "application/json" },
+        method: "PATCH",
+      },
+    );
   }
 
   deactivateMasterData<T extends MasterDataRecord>(
     resource: MasterDataResource,
     id: string,
   ) {
-    return this.request<ApiMutationResponse<T>>(
+    return this.mutateMasterData<ApiMutationResponse<T>>(
+      resource,
       `/admin/${resource}/${id}/deactivate`,
       { method: "POST" },
     );
@@ -564,7 +581,8 @@ export class ApiClient {
     recipeId: string,
     payload: Record<string, unknown>,
   ) {
-    return this.request<ApiMutationResponse<MasterDataRecord>>(
+    return this.mutateMasterData<ApiMutationResponse<MasterDataRecord>>(
+      "recipes",
       `/admin/recipes/${recipeId}/yield-observations`,
       {
         body: JSON.stringify(payload),
@@ -795,7 +813,9 @@ export class ApiClient {
   }
 
   reportCatalog() {
-    return this.request<ApiListResponse<ReportCatalogItem>>("/reports/catalog");
+    return this.request<ApiListResponse<ReportCatalogItem>>("/reports/catalog", {
+      cacheTtlMs: referenceCacheTtlMs,
+    });
   }
 
   reportRuns() {
@@ -957,41 +977,69 @@ export class ApiClient {
     });
   }
 
-  private async request<T>(path: string, init?: RequestInit) {
-    const method = init?.method ?? "GET";
+  private async mutateMasterData<T>(
+    resource: MasterDataResource,
+    path: string,
+    init: RequestInit,
+  ) {
+    const response = await this.request<T>(path, init);
+    await deleteCachedValue(this.cacheKey(`/admin/${resource}?take=500`));
+
+    return response;
+  }
+
+  private async request<T>(
+    path: string,
+    init?: RequestInit & { cacheTtlMs?: number },
+  ) {
+    const { cacheTtlMs, ...fetchInit } = init ?? {};
+    const method = fetchInit.method ?? "GET";
     const cacheKey = `api:${path}`;
 
-    try {
-      const response = await fetch(`${API_URL}${path}`, {
-        ...init,
-        headers: {
-          ...(init?.headers ?? {}),
-          Authorization: `Bearer ${this.accessToken}`,
-        },
-      });
+    if (method === "GET" && cacheTtlMs) {
+      const cached = await this.freshCachedValue<T>(cacheKey, cacheTtlMs);
 
-      if (!response.ok) {
-        throw new Error(await this.toErrorMessage(response));
+      if (cached) {
+        return cached;
       }
-
-      const body = (await response.json()) as T;
-
-      if (method === "GET") {
-        await setCachedValue(cacheKey, body);
-      }
-
-      return body;
-    } catch (error) {
-      if (method === "GET") {
-        const cached = await getCachedValue<T>(cacheKey);
-
-        if (cached) {
-          return cached.value;
-        }
-      }
-
-      throw error;
     }
+
+    const response = await fetch(`${API_URL}${path}`, {
+      ...fetchInit,
+      cache: "no-store",
+      headers: {
+        ...(fetchInit.headers ?? {}),
+        Authorization: `Bearer ${this.accessToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(await this.toErrorMessage(response));
+    }
+
+    const body = (await response.json()) as T;
+
+    if (method === "GET" && cacheTtlMs) {
+      await setCachedValue(cacheKey, body);
+    }
+
+    return body;
+  }
+
+  private cacheKey(path: string) {
+    return `api:${path}`;
+  }
+
+  private async freshCachedValue<T>(key: string, ttlMs: number) {
+    const cached = await getCachedValue<T>(key);
+
+    if (!cached) {
+      return null;
+    }
+
+    const ageMs = Date.now() - new Date(cached.updatedAt).getTime();
+
+    return ageMs <= ttlMs ? cached.value : null;
   }
 
   private async toErrorMessage(response: Response) {

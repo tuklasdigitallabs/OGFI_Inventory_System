@@ -589,3 +589,33 @@ Expected result: public traffic reaches apps through nginx only.
 
 - In-memory API throttling is per API container. If the API is scaled horizontally later, replace it with shared Redis-backed throttling.
 - Firewall and SSH daemon hardening require sudo/root access to verify and enforce.
+
+## Performance Cache Validation
+
+Scope: short client-side caching for safe reference data and fresh reads for inventory/transaction data.
+
+### 1. Reference Data Cache
+
+- Log in and open Purchasing.
+- Confirm suppliers, locations, items, and UOM selectors load normally.
+- Navigate away and return within five minutes.
+- Confirm reference selectors are available quickly without affecting purchase order freshness.
+
+Expected result: stable reference data can reuse the short client cache.
+
+### 2. Master Data Lazy Loading
+
+- Open Master Data.
+- Confirm the first visible tab and its required reference lists load.
+- Open another Master Data tab.
+- Confirm that tab loads when selected.
+
+Expected result: unopened Master Data tabs are not fetched until needed.
+
+### 3. Fresh Inventory and Transactions
+
+- Open Inventory and refresh stock/movements.
+- Create or update a purchase order, receiving, transfer, branch operation, report run, or sync batch.
+- Return to the related section and confirm the latest server data is shown.
+
+Expected result: inventory balances and transaction lists are always fetched from the server, not from client cache.

@@ -419,12 +419,14 @@ export function MasterDataLivePage({
         const readableResources = configs
           .map((config) => config.resource)
           .filter((resource) => canReadResource(resource, currentUser));
+        const requestedResource = initialResource ?? "items";
+        const nextActiveResource = readableResources.includes(requestedResource)
+          ? requestedResource
+          : readableResources[0];
         const resourcesToLoad =
-          lockedResource && initialResource
-            ? readableResources.filter(
-                (resource) => resource === initialResource,
-              )
-            : readableResources;
+          lockedResource && initialResource !== nextActiveResource
+            ? []
+            : resourcesNeededFor(nextActiveResource, currentUser);
         const responses = await Promise.all(
           resourcesToLoad.map(
             async (resource) =>
@@ -445,11 +447,7 @@ export function MasterDataLivePage({
           if (resourcesToLoad.length === 0) {
             setTableError("Insufficient permissions.");
           } else {
-            setActiveResource((current) =>
-              resourcesToLoad.includes(current)
-                ? current
-                : (resourcesToLoad[0] ?? current),
-            );
+            setActiveResource(nextActiveResource);
             setTableError(null);
           }
           setLoading(false);
@@ -479,7 +477,7 @@ export function MasterDataLivePage({
     setSelectedId(null);
   }, [activeConfig, records]);
 
-  function selectResource(resource: MasterDataResource) {
+  async function selectResource(resource: MasterDataResource) {
     if (!canReadResource(resource, user)) {
       setTableError("Insufficient permissions.");
       return;
@@ -490,6 +488,49 @@ export function MasterDataLivePage({
     setFieldErrors({});
     setFormError(null);
     setTableError(null);
+
+    const token = window.localStorage.getItem(TOKEN_KEY);
+
+    if (!token) {
+      setTableError("Sign in again to load master data.");
+      return;
+    }
+
+    const resourcesToLoad = resourcesNeededFor(resource, user).filter(
+      (nextResource) => !records[nextResource],
+    );
+
+    if (resourcesToLoad.length === 0) {
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      const client = new ApiClient(token);
+      const responses = await Promise.all(
+        resourcesToLoad.map(
+          async (nextResource) =>
+            [nextResource, await client.masterData(nextResource)] as const,
+        ),
+      );
+
+      setRecords((current) => ({
+        ...current,
+        ...Object.fromEntries(
+          responses.map(([nextResource, response]) => [
+            nextResource,
+            response.data,
+          ]),
+        ),
+      }));
+    } catch (error) {
+      setTableError(
+        error instanceof Error ? error.message : "Unable to load master data.",
+      );
+    } finally {
+      setLoading(false);
+    }
   }
 
   function updateFilter(key: string, value: string) {
@@ -1836,6 +1877,34 @@ function canReadResource(
   user: AuthenticatedUser | null,
 ) {
   return user?.permissions.includes(`master-data.${resource}:read`) ?? false;
+}
+
+function resourcesNeededFor(
+  resource: MasterDataResource | undefined,
+  user: AuthenticatedUser | null,
+) {
+  if (!resource || !canReadResource(resource, user)) {
+    return [];
+  }
+
+  const config = configs.find((entry) => entry.resource === resource);
+  const resources = new Set<MasterDataResource>([resource]);
+
+  for (const field of config?.fields ?? []) {
+    if (field.ref && canReadResource(field.ref, user)) {
+      resources.add(field.ref);
+    }
+  }
+
+  if (resource === "recipes") {
+    for (const ref of ["items", "uoms"] as MasterDataResource[]) {
+      if (canReadResource(ref, user)) {
+        resources.add(ref);
+      }
+    }
+  }
+
+  return Array.from(resources);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
