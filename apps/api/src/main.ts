@@ -21,7 +21,7 @@ function rateLimitRule(path: string): RateLimitRule | null {
     return { key: "auth-altcha", limit: 30, windowMs: 60_000 };
   }
   if (path.startsWith("/api/")) {
-    return { key: "api", limit: 600, windowMs: 60_000 };
+    return { key: "api", limit: 3_000, windowMs: 60_000 };
   }
   return null;
 }

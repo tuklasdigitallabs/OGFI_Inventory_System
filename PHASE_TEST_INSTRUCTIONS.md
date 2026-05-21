@@ -564,7 +564,8 @@ Scope: API request throttling, security headers, nginx edge limits, and VPS port
 - Confirm the API returns HTTP 429 with a retry message after the allowed attempts.
 - Call `/api/auth/altcha-challenge` more than 30 times from the same client IP within 60 seconds.
 - Confirm the API returns HTTP 429 after the allowed challenge requests.
-- Browse normal authenticated app pages and confirm ordinary API traffic still works.
+- Browse rapidly through Admin, Master Data, Inventory, Purchasing, Receiving, Transfers, Store Operations, Reports, and Offline Sync as an admin user.
+- Confirm ordinary authenticated navigation does not return HTTP 429 or sign the user out.
 
 Expected result: login and ALTCHA challenge abuse is throttled without blocking normal app use.
 
