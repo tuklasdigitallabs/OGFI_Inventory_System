@@ -335,7 +335,6 @@ const configs: ResourceConfig[] = [
   },
 ];
 
-const loadResources = configs.map((config) => config.resource);
 const emptyRecords: MasterDataRecord[] = [];
 const blankRecipeLine: RecipeLineForm = {
   ingredientId: "",
@@ -386,10 +385,15 @@ export function MasterDataLivePage({
     [activeConfig, visibleRecords],
   );
   const canCreateActiveResource = canCreateResource(activeResource, user);
-  const visibleConfigs =
-    lockedResource && initialResource
-      ? configs.filter((config) => config.resource === initialResource)
-      : configs;
+  const visibleConfigs = useMemo(() => {
+    const readableConfigs = configs.filter((config) =>
+      canReadResource(config.resource, user),
+    );
+
+    return lockedResource && initialResource
+      ? readableConfigs.filter((config) => config.resource === initialResource)
+      : readableConfigs;
+  }, [initialResource, lockedResource, user]);
 
   useEffect(() => {
     if (initialResource) {
@@ -411,15 +415,22 @@ export function MasterDataLivePage({
 
       try {
         const client = new ApiClient(token);
-        const [currentUser, responses] = await Promise.all([
-          client.currentUser(),
-          Promise.all(
-            loadResources.map(
-              async (resource) =>
-                [resource, await client.masterData(resource)] as const,
-            ),
+        const currentUser = await client.currentUser();
+        const readableResources = configs
+          .map((config) => config.resource)
+          .filter((resource) => canReadResource(resource, currentUser));
+        const resourcesToLoad =
+          lockedResource && initialResource
+            ? readableResources.filter(
+                (resource) => resource === initialResource,
+              )
+            : readableResources;
+        const responses = await Promise.all(
+          resourcesToLoad.map(
+            async (resource) =>
+              [resource, await client.masterData(resource)] as const,
           ),
-        ]);
+        );
 
         if (!cancelled) {
           setUser(currentUser);
@@ -431,7 +442,16 @@ export function MasterDataLivePage({
               ]),
             ),
           );
-          setTableError(null);
+          if (resourcesToLoad.length === 0) {
+            setTableError("Insufficient permissions.");
+          } else {
+            setActiveResource((current) =>
+              resourcesToLoad.includes(current)
+                ? current
+                : (resourcesToLoad[0] ?? current),
+            );
+            setTableError(null);
+          }
           setLoading(false);
         }
       } catch (loadError) {
@@ -451,7 +471,7 @@ export function MasterDataLivePage({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [initialResource, lockedResource]);
 
   useEffect(() => {
     setForm(blankForm(activeConfig, records));
@@ -460,6 +480,11 @@ export function MasterDataLivePage({
   }, [activeConfig, records]);
 
   function selectResource(resource: MasterDataResource) {
+    if (!canReadResource(resource, user)) {
+      setTableError("Insufficient permissions.");
+      return;
+    }
+
     setActiveResource(resource);
     setFilters({});
     setFieldErrors({});
@@ -1804,6 +1829,13 @@ function canCreateResource(
   user: AuthenticatedUser | null,
 ) {
   return user?.permissions.includes(`master-data.${resource}:create`) ?? false;
+}
+
+function canReadResource(
+  resource: MasterDataResource,
+  user: AuthenticatedUser | null,
+) {
+  return user?.permissions.includes(`master-data.${resource}:read`) ?? false;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
