@@ -491,6 +491,7 @@ export function AuthGate({ children }: AuthGateProps) {
               hidelogo: "true",
               key: captchaKey,
               name: "altcha",
+              workers: "0",
             })}
           </div>
 
