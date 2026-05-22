@@ -7,11 +7,13 @@ import { DataTable } from "./data-table";
 import { FilterBar } from "./filter-bar";
 import { KpiCard } from "./kpi-card";
 import { Icon } from "@/lib/icons";
+import { offlineQueueCount } from "@/lib/offline-db";
 import type { Kpi, Screen } from "@/lib/screens";
 import {
   ApiClient,
   TOKEN_KEY,
   type LedgerMovementRow,
+  type BranchOperationRecord,
   type MenuPrice,
   type PurchaseOrder,
   type StockOnHandRow,
@@ -27,8 +29,10 @@ type DashboardState = {
   movements: LedgerMovementRow[];
   menuPrices: MenuPrice[];
   purchaseOrders: PurchaseOrder[];
+  pendingSync: number;
   stock: StockOnHandRow[];
   transfers: Transfer[];
+  wastage: BranchOperationRecord[];
 };
 
 type QuickActionSeverity = "critical" | "high" | "medium" | "low";
@@ -45,10 +49,12 @@ export function DashboardLivePage({ screen }: DashboardLivePageProps) {
   const [state, setState] = useState<DashboardState>({
     loading: true,
     menuPrices: [],
+    pendingSync: 0,
     movements: [],
     purchaseOrders: [],
     stock: [],
     transfers: [],
+    wastage: [],
   });
 
   useEffect(() => {
@@ -71,6 +77,8 @@ export function DashboardLivePage({ screen }: DashboardLivePageProps) {
           transferResponse,
           purchaseOrderResponse,
           menuPriceResponse,
+          wastageResponses,
+          pendingSync,
         ] = await Promise.all([
           Promise.all(
             user.locationIds.map((locationId) =>
@@ -91,6 +99,14 @@ export function DashboardLivePage({ screen }: DashboardLivePageProps) {
           client
             .menuPrices()
             .catch(() => ({ resource: "menu-pricing", data: [] })),
+          Promise.all(
+            user.locationIds.map((locationId) =>
+              client
+                .branchWastage(locationId)
+                .catch(() => ({ resource: "branch.wastage", data: [] })),
+            ),
+          ),
+          offlineQueueCount().catch(() => 0),
         ]);
 
         if (!cancelled) {
@@ -98,6 +114,7 @@ export function DashboardLivePage({ screen }: DashboardLivePageProps) {
             loading: false,
             menuPrices: menuPriceResponse.data,
             movements: movementResponses.flatMap((response) => response.data),
+            pendingSync,
             purchaseOrders: purchaseOrderResponse.data.filter((purchaseOrder) =>
               user.locationIds.includes(purchaseOrder.locationId),
             ),
@@ -107,6 +124,7 @@ export function DashboardLivePage({ screen }: DashboardLivePageProps) {
                 user.locationIds.includes(transfer.sourceLocationId) ||
                 user.locationIds.includes(transfer.targetLocationId),
             ),
+            wastage: wastageResponses.flatMap((response) => response.data),
           });
         }
       } catch {
@@ -129,9 +147,18 @@ export function DashboardLivePage({ screen }: DashboardLivePageProps) {
         screen.kpis,
         state.stock,
         state.transfers,
+        state.wastage,
+        state.pendingSync,
         state.loading,
       ),
-    [screen.kpis, state.loading, state.stock, state.transfers],
+    [
+      screen.kpis,
+      state.loading,
+      state.pendingSync,
+      state.stock,
+      state.transfers,
+      state.wastage,
+    ],
   );
   const quickActions = useMemo(
     () =>
@@ -266,9 +293,11 @@ function emptyDashboardState(loading: boolean): DashboardState {
     loading,
     menuPrices: [],
     movements: [],
+    pendingSync: 0,
     purchaseOrders: [],
     stock: [],
     transfers: [],
+    wastage: [],
   };
 }
 
@@ -405,6 +434,8 @@ function mergeDashboardKpis(
   kpis: Kpi[],
   stock: StockOnHandRow[],
   transfers: Transfer[],
+  wastage: BranchOperationRecord[],
+  pendingSync: number,
   loading: boolean,
 ) {
   const stockValue = stock.reduce(
@@ -432,6 +463,16 @@ function mergeDashboardKpis(
   const variances = transfers.filter(
     (transfer) => transfer.status === "VARIANCE_REVIEW",
   ).length;
+  const wastageValue = wastage.reduce(
+    (total, record) =>
+      total +
+      record.lines.reduce(
+        (lineTotal, line) =>
+          lineTotal + Number(line.qty ?? 0) * Number(line.unitCost ?? 0),
+        0,
+      ),
+    0,
+  );
   const blockedLocations = new Set(
     transfers
       .filter((transfer) =>
@@ -478,6 +519,16 @@ function mergeDashboardKpis(
         } satisfies Kpi;
       }
 
+      if (kpi.label === "Pending Sync") {
+        return {
+          ...kpi,
+          href: "/offline-sync",
+          value: loading ? "..." : formatInteger(pendingSync),
+          meta: "Offline events queued",
+          tone: pendingSync > 0 ? "warning" : "success",
+        } satisfies Kpi;
+      }
+
       if (kpi.label === "Variance") {
         return {
           ...kpi,
@@ -485,6 +536,16 @@ function mergeDashboardKpis(
           value: loading ? "..." : formatInteger(variances),
           meta: "Transfer variances needing review",
           tone: variances > 0 ? "warning" : "success",
+        } satisfies Kpi;
+      }
+
+      if (kpi.label === "Wastage This Period") {
+        return {
+          ...kpi,
+          href: "/store-operations?tab=wastage",
+          value: loading ? "..." : formatCurrency(wastageValue),
+          meta: "Approved and draft records",
+          tone: wastageValue > 0 ? "danger" : "success",
         } satisfies Kpi;
       }
 

@@ -228,6 +228,7 @@ export type BranchOperationLine = {
   systemQty?: string | null;
   varianceQty?: string | null;
   qtySold?: string;
+  unitCost?: string | null;
   item?: MasterDataRecord;
 };
 
