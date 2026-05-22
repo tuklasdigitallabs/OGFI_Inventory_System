@@ -647,3 +647,59 @@ Expected result: unopened Master Data tabs are not fetched until needed.
 - Return to the related section and confirm the latest server data is shown.
 
 Expected result: inventory balances and transaction lists are always fetched from the server, not from client cache.
+
+## Local Database Reset Script
+
+Scope: local-only database reset helper for development environments.
+
+### 1. Guarded Dry Run
+
+- Run `npm run api:db:reset:local -- --dry-run`.
+- Confirm it reports the local database target and backup directory without changing the database.
+- Temporarily override `NODE_ENV=production` or use a non-local `DATABASE_URL`.
+- Confirm the script refuses to run.
+
+Expected result: unsafe or production-looking targets are blocked before backup or reset work begins.
+
+### 2. Local Reset
+
+- Run `npm run api:db:reset:local -- --yes`.
+- Confirm a `pg_dump` backup is created before reset.
+- Confirm Prisma migrations recreate the schema.
+- Confirm the existing local seed script loads baseline development data.
+
+Expected result: the local API database is rebuilt from existing Prisma migrations and seeded with local baseline data.
+
+### Known Limitations
+
+- The script targets the API PostgreSQL database only. Browser IndexedDB offline cache and queue data are separate and are not cleared.
+- The seed step uses existing `apps/api/.env` seed variables and does not edit credential or production config files.
+
+## Demo Data Reset Script
+
+Scope: reset client testing/demo workflow data while preserving accounts and configuration.
+
+### 1. Guarded Dry Run
+
+- Run `npm run api:demo-data:reset -- --dry-run`.
+- Confirm it reports the local database target, backup directory, preserved data, and cleared data.
+- Temporarily override `NODE_ENV=production` or use a production-looking `DATABASE_URL`.
+- Confirm the script refuses to run.
+
+Expected result: unsafe targets are blocked before backup or reset work begins.
+
+### 2. Client Testing Data Reset
+
+- Run `npm run api:demo-data:reset -- --yes`.
+- Confirm a `pg_dump` backup is created before data is cleared.
+- Confirm purchasing, receiving, transfer, ledger, count, wastage, issue, sales, sync, report, audit, and menu-pricing test records are cleared.
+- Confirm users, passwords, roles, permissions, master data, sync devices, and system settings remain available.
+- Confirm the existing seed restores safe baseline master data and opening stock without changing seeded account credentials.
+
+Expected result: client testers get a clean operational dataset without losing login credentials or local configuration.
+
+### Known Limitations
+
+- Browser IndexedDB offline cache and queue data are separate and are not cleared.
+- This is not a schema reset. Use the full local database reset only when migrations and schema recreation must be tested.
+- In the deployed API container, run `ALLOW_REMOTE_DEMO_RESET=true NODE_ENV=development npm run demo-data:reset -- --dry-run` before the `--yes` run, then copy the printed backup file out of the container.

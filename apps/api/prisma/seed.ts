@@ -701,6 +701,10 @@ function adminCredentials() {
   };
 }
 
+function preserveSeededAccounts() {
+  return process.env.PRESERVE_SEEDED_ACCOUNTS === "true";
+}
+
 function devSuperCredentials() {
   const password = process.env.SEED_DEV_SUPER_PASSWORD;
 
@@ -987,7 +991,16 @@ async function seedRecipes() {
 }
 
 async function seedAdminUser() {
-  const { email, username, password } = adminCredentials();
+  const email = process.env.SEED_ADMIN_EMAIL ?? "admin@ogfi.local";
+  const username = process.env.SEED_ADMIN_USERNAME ?? "admin";
+  const existing = await prisma.user.findUnique({ where: { email } });
+
+  if (preserveSeededAccounts() && existing) {
+    await grantSeededLocationAccess(existing.id);
+    return existing;
+  }
+
+  const { password } = adminCredentials();
   const adminRole = await prisma.role.findUniqueOrThrow({
     where: { code: RoleCode.ADMIN },
   });
@@ -1018,6 +1031,14 @@ async function seedAdminUser() {
 }
 
 async function seedDevSuperUser() {
+  const email = process.env.SEED_DEV_SUPER_EMAIL ?? "dev.super@ogfi.local";
+  const existing = await prisma.user.findUnique({ where: { email } });
+
+  if (preserveSeededAccounts() && existing) {
+    await grantSeededLocationAccess(existing.id);
+    return existing;
+  }
+
   const credentials = devSuperCredentials();
 
   if (!credentials) {

@@ -13,6 +13,8 @@
     "api:prisma:generate": "npm run prisma:generate -w apps/api",
     "api:prisma:migrate": "npm run prisma:migrate -w apps/api",
     "api:prisma:seed": "npm run prisma:seed -w apps/api",
+    "api:db:reset:local": "node scripts/reset-local-db.js",
+    "api:demo-data:reset": "node scripts/reset-demo-data.js",
     "web:dev": "npm run dev -w apps/web",
     "web:build": "npm run build -w apps/web",
     "web:lint": "npm run lint -w apps/web"
