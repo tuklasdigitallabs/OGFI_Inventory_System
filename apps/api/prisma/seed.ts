@@ -701,6 +701,20 @@ function adminCredentials() {
   };
 }
 
+function devSuperCredentials() {
+  const password = process.env.SEED_DEV_SUPER_PASSWORD;
+
+  if (!password) {
+    return null;
+  }
+
+  return {
+    email: process.env.SEED_DEV_SUPER_EMAIL ?? "dev.super@ogfi.local",
+    username: process.env.SEED_DEV_SUPER_USERNAME ?? "dev-super",
+    password,
+  };
+}
+
 async function seedRoles() {
   for (const [code, name, description] of roles) {
     await prisma.role.upsert({
@@ -998,6 +1012,57 @@ async function seedAdminUser() {
     },
   });
 
+  await grantSeededLocationAccess(admin.id);
+
+  return admin;
+}
+
+async function seedDevSuperUser() {
+  const credentials = devSuperCredentials();
+
+  if (!credentials) {
+    return null;
+  }
+
+  const adminRole = await prisma.role.findUniqueOrThrow({
+    where: { code: RoleCode.ADMIN },
+  });
+  const passwordHash = await bcrypt.hash(credentials.password, 12);
+
+  const user = await prisma.user.upsert({
+    where: { email: credentials.email },
+    update: {
+      username: credentials.username,
+      fullName: "OGFI Dev Super User",
+      active: true,
+      roleId: adminRole.id,
+      passwordHash,
+      mustChangePassword: false,
+      failedLoginCount: 0,
+      lastFailedLoginAt: null,
+      restrictedAt: null,
+      restrictedReason: null,
+      restrictionCount: 0,
+      restrictionWindowStart: null,
+      lockedAt: null,
+      lockReason: null,
+    },
+    create: {
+      email: credentials.email,
+      username: credentials.username,
+      fullName: "OGFI Dev Super User",
+      active: true,
+      roleId: adminRole.id,
+      passwordHash,
+    },
+  });
+
+  await grantSeededLocationAccess(user.id);
+
+  return user;
+}
+
+async function grantSeededLocationAccess(userId: string) {
   const seededLocations = await prisma.location.findMany({
     where: { code: { in: locations.map(([code]) => code) } },
     select: { id: true },
@@ -1006,14 +1071,12 @@ async function seedAdminUser() {
   for (const location of seededLocations) {
     await prisma.userLocationAccess.upsert({
       where: {
-        userId_locationId: { userId: admin.id, locationId: location.id },
+        userId_locationId: { userId, locationId: location.id },
       },
       update: {},
-      create: { userId: admin.id, locationId: location.id },
+      create: { userId, locationId: location.id },
     });
   }
-
-  return admin;
 }
 
 async function seedOpeningStock(createdById: string) {
@@ -1081,6 +1144,7 @@ async function main() {
   await seedRecipes();
   await seedReasonCodes();
   const admin = await seedAdminUser();
+  await seedDevSuperUser();
   await seedOpeningStock(admin.id);
 }
 

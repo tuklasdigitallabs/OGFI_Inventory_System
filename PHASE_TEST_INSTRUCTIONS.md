@@ -554,6 +554,34 @@ These are intentionally left for the next Offline Sync slice:
 
 Phase 11 passes when users can queue offline stock-touching events, submit them as sync batches, verify ledger results, confirm duplicate UUID idempotency, and edit/retry rejected local entries.
 
+## Dev Super User Recovery Validation
+
+Scope: local seeded break-glass account for resetting or unlocking restricted admin accounts.
+
+### 1. Seed Dev Super User
+
+- Set `SEED_DEV_SUPER_PASSWORD` in `apps/api/.env`.
+- Run the API seed command.
+- Log in with `SEED_DEV_SUPER_USERNAME`.
+- Open Admin Settings.
+
+Expected result: the dev super user can log in, has admin permissions, and can see user management.
+
+### 2. Recover Restricted Admin
+
+- Restrict or lock a non-dev admin account through failed login attempts.
+- Log in as the dev super user.
+- Use Admin Settings to unlock or unrestrict the affected admin account.
+- Reset the affected admin password if needed.
+- Log in as the recovered admin with the reset password.
+
+Expected result: the dev super user can clear admin account restrictions and reset admin passwords without direct database edits.
+
+### Known Limitations
+
+- The dev super user is intended for local/development recovery and is only seeded when `SEED_DEV_SUPER_PASSWORD` is configured.
+- Keep the dev super user password out of source control and production environments unless a formal break-glass policy is approved.
+
 ## Security Hardening Validation
 
 Scope: API request throttling, security headers, nginx edge limits, and VPS port exposure.
