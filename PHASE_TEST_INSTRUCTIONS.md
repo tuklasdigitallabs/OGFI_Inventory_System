@@ -586,6 +586,15 @@ Expected result: the dev super user can clear admin account restrictions and res
 
 Scope: API request throttling, security headers, nginx edge limits, and VPS port exposure.
 
+### 0. Web Production API URL
+
+- Build the web image with `apps/web/Dockerfile`.
+- Confirm the build receives `NEXT_PUBLIC_API_URL=https://inventory.onegourmetph.com/api` through the Docker build argument or default.
+- Open the production login page and inspect the ALTCHA widget challenge URL.
+- Confirm the challenge URL is `https://inventory.onegourmetph.com/api/auth/altcha-challenge`, not `http://localhost:3000/api/auth/altcha-challenge`.
+
+Expected result: the production web bundle calls the public production API URL baked in at build time.
+
 ### 1. API Request Limits
 
 - Call `/api/auth/login` more than 10 times from the same client IP within 60 seconds.
