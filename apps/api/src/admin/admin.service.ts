@@ -78,7 +78,7 @@ export class AdminService {
     user: AuthenticatedUser,
     metadata: RequestAuditMetadata = {},
   ) {
-    await this.validateRole(dto.roleId);
+    const roleId = await this.resolveRoleId(dto.roleId);
     await this.validateLocations(dto.locationIds);
 
     try {
@@ -89,7 +89,7 @@ export class AdminService {
           fullName: dto.fullName.trim(),
           passwordHash: await bcrypt.hash(defaultTemporaryPassword, 12),
           mustChangePassword: true,
-          roleId: dto.roleId,
+          roleId,
           active: dto.active ?? true,
           locationAccess: {
             create: dto.locationIds.map((locationId) => ({ locationId })),
@@ -124,10 +124,9 @@ export class AdminService {
     metadata: RequestAuditMetadata = {},
   ) {
     const before = await this.findUser(id);
-
-    if (dto.roleId) {
-      await this.validateRole(dto.roleId);
-    }
+    const roleId = dto.roleId
+      ? await this.resolveRoleId(dto.roleId)
+      : undefined;
 
     if (dto.locationIds) {
       await this.validateLocations(dto.locationIds);
@@ -151,7 +150,7 @@ export class AdminService {
             email: dto.email?.trim().toLowerCase(),
             username: dto.username?.trim(),
             fullName: dto.fullName?.trim(),
-            roleId: dto.roleId,
+            roleId,
             active: dto.active,
             passwordHash: dto.password
               ? await bcrypt.hash(dto.password, 12)
@@ -872,12 +871,30 @@ export class AdminService {
     }
   }
 
-  private async validateRole(roleId: string) {
-    const role = await this.prisma.role.findUnique({ where: { id: roleId } });
+  private async resolveRoleId(roleIdOrCode: string) {
+    const roleId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      roleIdOrCode,
+    )
+      ? roleIdOrCode
+      : undefined;
+    const roleCode = Object.values(RoleCode).includes(roleIdOrCode as RoleCode)
+      ? (roleIdOrCode as RoleCode)
+      : undefined;
+    const role = await this.prisma.role.findFirst({
+      where: {
+        OR: [
+          ...(roleId ? [{ id: roleId }] : []),
+          ...(roleCode ? [{ code: roleCode }] : []),
+        ],
+      },
+      select: { id: true },
+    });
 
     if (!role) {
       throw new BadRequestException("Role is invalid.");
     }
+
+    return role.id;
   }
 
   private assertAdministrator(user: AuthenticatedUser) {

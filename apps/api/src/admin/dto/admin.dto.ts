@@ -19,7 +19,7 @@ export class CreateAdminUserDto {
   @IsString()
   fullName!: string;
 
-  @IsUUID()
+  @IsString()
   roleId!: string;
 
   @IsOptional()
@@ -51,7 +51,7 @@ export class UpdateAdminUserDto {
   fullName?: string;
 
   @IsOptional()
-  @IsUUID()
+  @IsString()
   roleId?: string;
 
   @IsOptional()
