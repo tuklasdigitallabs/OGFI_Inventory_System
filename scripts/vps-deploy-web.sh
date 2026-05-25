@@ -11,9 +11,9 @@ cd "$ROOT_DIR"
 ./scripts/restart-web-container.sh
 
 printf "\nChecking API challenge endpoint...\n"
-curl -fsS "$API_CHALLENGE_URL" >/dev/null
+curl --retry 10 --retry-delay 2 --retry-connrefused -fsS "$API_CHALLENGE_URL" >/dev/null
 printf "API challenge endpoint responded: %s\n" "$API_CHALLENGE_URL"
 
 printf "\nChecking app endpoint...\n"
-curl -fsS "$APP_URL" >/dev/null
+curl --retry 10 --retry-delay 2 --retry-connrefused -fsS "$APP_URL" >/dev/null
 printf "App endpoint responded: %s\n" "$APP_URL"
