@@ -62,14 +62,19 @@ Expected result: Other users can be deactivated, but self-deactivation is blocke
 - Confirm Administrator is selected by default.
 - Confirm the left section shows the available role list.
 - Click a different role in the left section.
-- Confirm the right section shows that role's permission access list.
-- Select or clear a permission checkbox on a non-admin test role.
+- Confirm the right section shows module permission cards instead of one long flat list.
+- Confirm each module card shows an access summary and enabled permission count.
+- Use the None, View, Manage, and Full controls on a non-admin test role.
+- Expand Advanced on a module and confirm the exact permission checkboxes are still available.
+- Search for a permission or module and confirm the visible cards are filtered.
+- Use Enabled and Changed filters and confirm the list reflects the selected filter.
+- Select or clear an advanced permission checkbox on a non-admin test role.
 - Click Save Permissions.
 - Refresh the page.
 - Confirm the permission change persists.
 - Log in as a user with that role if possible and confirm the changed permission affects access.
 
-Expected result: Existing role permissions can be maintained from Admin Settings.
+Expected result: Existing role permissions can be maintained from Admin Settings through grouped module controls, with exact advanced permissions still available when needed.
 
 ### 6. Audit Logs
 
@@ -712,3 +717,36 @@ Expected result: client testers get a clean operational dataset without losing l
 - Browser IndexedDB offline cache and queue data are separate and are not cleared.
 - This is not a schema reset. Use the full local database reset only when migrations and schema recreation must be tested.
 - In the deployed API container, run `ALLOW_REMOTE_DEMO_RESET=true NODE_ENV=development npm run demo-data:reset -- --dry-run` before the `--yes` run, then copy the printed backup file out of the container.
+
+## Admin User Role Selector Contract
+
+Scope: user create/update wiring between Admin UI role selection and API validation.
+
+### 1. Runtime Contract Check
+
+- Deploy the current API image.
+- Run `curl -k https://127.0.0.1/api/build-info`.
+- Confirm `roleSelectorContract` is `uuid-or-role-code`.
+
+Expected result: the live API is not an older image that only accepts UUID role selectors.
+
+### 2. Admin User Save
+
+- Log in as an administrator and open Admin > Users.
+- Create a user with the default role selected.
+- Edit an existing user and change their role.
+- Confirm each save succeeds without `roleId must be a UUID`.
+
+Expected result: the UI submits the current role UUID, and the API also accepts a role code or role name if a stale client sends one.
+
+### 3. Regression Checks
+
+- Run `npm test -w apps/api -- admin.dto.spec.ts`.
+- Run `npm run api:build`.
+- Run `npm run web:build`.
+
+Expected result: role UUIDs, including deterministic seeded UUIDs such as `33333333-3333-3333-3333-333333333333`, uppercase role codes, lowercase role codes, role names, and short display labels pass DTO validation; unknown non-empty role selectors fail during role lookup with `Role is invalid.`
+
+### Known Limitations
+
+- Existing rollback images still contain the old UUID-only contract. Use `/api/build-info` after every emergency image swap to confirm the expected API is live.

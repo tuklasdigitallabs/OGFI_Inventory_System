@@ -168,7 +168,9 @@ export function AdminLivePage({ screen }: AdminLivePageProps) {
           setSelectedRoleId(defaultRoleId(roles.data));
           setUserForm((current) => ({
             ...current,
-            roleId: roles.data[0]?.id ?? "",
+            roleId:
+              normalizeRoleId(current.roleId, roles.data) ||
+              defaultRoleId(roles.data),
           }));
         }
       } catch (error) {
@@ -236,7 +238,7 @@ export function AdminLivePage({ screen }: AdminLivePageProps) {
         email: userForm.email,
         username: userForm.username,
         fullName: userForm.fullName,
-        roleId: userForm.roleId,
+        roleId: normalizeRoleId(userForm.roleId, state.roles),
         active: userForm.active,
         locationIds: userForm.locationIds,
       };
@@ -248,7 +250,7 @@ export function AdminLivePage({ screen }: AdminLivePageProps) {
       }
 
       await refresh(client);
-      setUserForm({ ...emptyUserForm, roleId: state.roles[0]?.id ?? "" });
+      setUserForm({ ...emptyUserForm, roleId: defaultRoleId(state.roles) });
       setState((current) => ({ ...current, error: null }));
     } catch (error) {
       setState((current) => ({
@@ -397,7 +399,7 @@ export function AdminLivePage({ screen }: AdminLivePageProps) {
       fullName: user.fullName,
       id: user.id,
       locationIds: user.locationIds,
-      roleId: user.roleId,
+      roleId: normalizeRoleId(user.roleId || user.roleCode, state.roles),
       username: user.username,
     });
   }
@@ -752,7 +754,7 @@ function UserEditor({
             disabled={disabled}
             type="button"
             onClick={() =>
-              setForm({ ...emptyUserForm, roleId: roles[0]?.id ?? "" })
+              setForm({ ...emptyUserForm, roleId: defaultRoleId(roles) })
             }
           >
             Clear
@@ -1105,9 +1107,53 @@ function RolesPanel({
   setSelectedRoleId: (roleId: string) => void;
   setRoleDrafts: (drafts: Record<string, string[]>) => void;
 }) {
-  const permissionsByModule = groupPermissions(permissions);
+  const [expandedModules, setExpandedModules] = useState<Record<string, boolean>>(
+    {},
+  );
+  const [permissionSearch, setPermissionSearch] = useState("");
+  const [permissionFilter, setPermissionFilter] = useState<
+    "all" | "enabled" | "changed"
+  >("all");
   const selectedRole =
     roles.find((role) => role.id === selectedRoleId) ?? roles[0];
+  const selectedIds = selectedRole ? (roleDrafts[selectedRole.id] ?? []) : [];
+  const originalIds = selectedRole ? selectedRole.permissionIds : [];
+  const permissionGroups = buildPermissionGroups(permissions);
+
+  function setSelectedPermissions(nextIds: string[]) {
+    if (!selectedRole) {
+      return;
+    }
+
+    setRoleDrafts({
+      ...roleDrafts,
+      [selectedRole.id]: uniqueIds(nextIds),
+    });
+  }
+
+  function setGroupPermissions(
+    modulePermissions: AdminPermission[],
+    mode: "none" | "view" | "manage" | "full",
+  ) {
+    const groupIds = modulePermissions.map((permission) => permission.id);
+    const withoutGroup = selectedIds.filter((id) => !groupIds.includes(id));
+    const nextGroupIds =
+      mode === "none"
+        ? []
+        : modulePermissions
+            .filter((permission) => permissionMatchesAccessMode(permission, mode))
+            .map((permission) => permission.id);
+
+    setSelectedPermissions([...withoutGroup, ...nextGroupIds]);
+  }
+
+  function togglePermission(permissionId: string, checked: boolean) {
+    setSelectedPermissions(
+      checked
+        ? [...selectedIds, permissionId]
+        : selectedIds.filter((id) => id !== permissionId),
+    );
+  }
 
   return (
     <section className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
@@ -1175,60 +1221,203 @@ function RolesPanel({
             </button>
           </div>
 
-          <div className="grid max-h-[560px] gap-3 overflow-y-auto pr-1">
-            {Object.entries(permissionsByModule).map(
-              ([module, modulePermissions]) => (
-                <fieldset
-                  className="rounded-md border border-og-line p-3"
-                  key={module}
+          <div className="grid gap-3 rounded-md border border-og-line bg-gray-50 p-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+            <label className="flex h-10 items-center gap-2 rounded-md border border-og-line bg-white px-3 text-sm text-og-gray">
+              <Icon name="Search" size={16} />
+              <input
+                className="min-w-0 flex-1 bg-transparent text-sm text-og-dark outline-none"
+                placeholder="Search module or permission"
+                value={permissionSearch}
+                onChange={(event) => setPermissionSearch(event.target.value)}
+              />
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {[
+                ["all", "All"],
+                ["enabled", "Enabled"],
+                ["changed", "Changed"],
+              ].map(([value, label]) => (
+                <button
+                  className={`h-9 rounded-md border px-3 text-xs font-semibold transition ${
+                    permissionFilter === value
+                      ? "border-og-green bg-green-50 text-og-green"
+                      : "border-og-line bg-white text-og-gray hover:text-og-dark"
+                  }`}
+                  key={value}
+                  type="button"
+                  onClick={() =>
+                    setPermissionFilter(value as "all" | "enabled" | "changed")
+                  }
                 >
-                  <legend className="px-1 text-xs font-semibold uppercase text-og-gray">
-                    {module}
-                  </legend>
-                  <div className="grid gap-2 pt-1">
-                    {modulePermissions.map((permission) => {
-                      const selected = (
-                        roleDrafts[selectedRole.id] ?? []
-                      ).includes(permission.id);
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
 
-                      return (
-                        <label
-                          className="flex items-start gap-2 text-sm text-og-dark"
-                          key={permission.id}
-                        >
-                          <input
-                            checked={selected}
-                            disabled={disabled}
-                            type="checkbox"
-                            onChange={(event) => {
-                              const current = roleDrafts[selectedRole.id] ?? [];
-                              setRoleDrafts({
-                                ...roleDrafts,
-                                [selectedRole.id]: event.target.checked
-                                  ? [...current, permission.id]
-                                  : current.filter(
-                                      (id) => id !== permission.id,
-                                    ),
-                              });
-                            }}
-                          />
-                          <span>
-                            <span className="font-semibold">
-                              {permission.action}
-                            </span>
-                            {permission.description ? (
-                              <span className="block text-xs text-og-gray">
-                                {permission.description}
-                              </span>
-                            ) : null}
+          <div className="grid max-h-[620px] gap-3 overflow-y-auto pr-1">
+            {permissionGroups
+              .filter((group) =>
+                permissionGroupVisible(
+                  group,
+                  selectedIds,
+                  originalIds,
+                  permissionSearch,
+                  permissionFilter,
+                ),
+              )
+              .map((group) => {
+                const selectedCount = group.permissions.filter((permission) =>
+                  selectedIds.includes(permission.id),
+                ).length;
+                const sensitiveCount = group.permissions.filter(
+                  isSensitivePermission,
+                ).length;
+                const accessLabel = describeGroupAccess(
+                  group.permissions,
+                  selectedIds,
+                );
+                const expanded = expandedModules[group.key] ?? false;
+                const visiblePermissions = filterPermissions(
+                  group.permissions,
+                  selectedIds,
+                  originalIds,
+                  permissionSearch,
+                  permissionFilter,
+                );
+
+                return (
+                  <section
+                    className="rounded-md border border-og-line bg-white p-3"
+                    key={group.key}
+                  >
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="font-poppins text-base font-semibold text-og-dark">
+                            {group.label}
+                          </h3>
+                          <span className="rounded-full bg-gray-100 px-2 py-1 text-xs font-semibold text-og-gray">
+                            {selectedCount} of {group.permissions.length} enabled
                           </span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </fieldset>
-              ),
-            )}
+                          {sensitiveCount > 0 ? (
+                            <span className="rounded-full bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">
+                              Sensitive
+                            </span>
+                          ) : null}
+                        </div>
+                        <p className="mt-1 text-sm text-og-gray">
+                          {accessLabel}
+                        </p>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        {[
+                          ["none", "None"],
+                          ["view", "View"],
+                          ["manage", "Manage"],
+                          ["full", "Full"],
+                        ].map(([mode, label]) => (
+                          <button
+                            className={`h-8 rounded-md border px-3 text-xs font-semibold transition ${
+                              groupAccessMatches(
+                                group.permissions,
+                                selectedIds,
+                                mode as "none" | "view" | "manage" | "full",
+                              )
+                                ? "border-og-green bg-green-50 text-og-green"
+                                : "border-og-line text-og-gray hover:text-og-dark"
+                            }`}
+                            disabled={disabled}
+                            key={mode}
+                            type="button"
+                            onClick={() =>
+                              setGroupPermissions(
+                                group.permissions,
+                                mode as "none" | "view" | "manage" | "full",
+                              )
+                            }
+                          >
+                            {label}
+                          </button>
+                        ))}
+                        <button
+                          className="inline-flex h-8 items-center gap-1 rounded-md border border-og-line px-3 text-xs font-semibold text-og-gray transition hover:text-og-dark"
+                          type="button"
+                          onClick={() =>
+                            setExpandedModules({
+                              ...expandedModules,
+                              [group.key]: !expanded,
+                            })
+                          }
+                        >
+                          <Icon
+                            name={expanded ? "ChevronUp" : "ChevronDown"}
+                            size={14}
+                          />
+                          Advanced
+                        </button>
+                      </div>
+                    </div>
+
+                    {expanded ? (
+                      <div className="mt-3 grid gap-2 border-t border-og-line pt-3 md:grid-cols-2">
+                        {visiblePermissions.length === 0 ? (
+                          <p className="text-sm text-og-gray">
+                            No permissions match the current filter.
+                          </p>
+                        ) : (
+                          visiblePermissions.map((permission) => {
+                            const selected = selectedIds.includes(permission.id);
+                            const changed =
+                              selected !== originalIds.includes(permission.id);
+
+                            return (
+                              <label
+                                className="flex items-start gap-2 rounded-md border border-og-line p-2 text-sm text-og-dark"
+                                key={permission.id}
+                              >
+                                <input
+                                  checked={selected}
+                                  className="mt-1"
+                                  disabled={disabled}
+                                  type="checkbox"
+                                  onChange={(event) =>
+                                    togglePermission(
+                                      permission.id,
+                                      event.target.checked,
+                                    )
+                                  }
+                                />
+                                <span className="min-w-0">
+                                  <span className="flex flex-wrap items-center gap-2 font-semibold">
+                                    {formatPermissionName(permission)}
+                                    {changed ? (
+                                      <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700">
+                                        Changed
+                                      </span>
+                                    ) : null}
+                                    {isSensitivePermission(permission) ? (
+                                      <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+                                        Sensitive
+                                      </span>
+                                    ) : null}
+                                  </span>
+                                  {permission.description ? (
+                                    <span className="mt-1 block text-xs text-og-gray">
+                                      {permission.description}
+                                    </span>
+                                  ) : null}
+                                </span>
+                              </label>
+                            );
+                          })
+                        )}
+                      </div>
+                    ) : null}
+                  </section>
+                );
+              })}
           </div>
         </div>
       ) : null}
@@ -1657,15 +1846,235 @@ function formatInteger(value: number) {
   );
 }
 
-function groupPermissions(permissions: AdminPermission[]) {
-  return permissions.reduce<Record<string, AdminPermission[]>>(
-    (groups, permission) => {
-      groups[permission.module] = groups[permission.module] ?? [];
-      groups[permission.module].push(permission);
-      return groups;
+type PermissionGroup = {
+  key: string;
+  label: string;
+  permissions: AdminPermission[];
+};
+
+const moduleLabels: Record<string, string> = {
+  admin: "Admin Settings",
+  auth: "System Access",
+  branch: "Store Operations",
+  inventory: "Inventory",
+  ledger: "Ledger Controls",
+  "master-data": "Master Data",
+  "menu-pricing": "Menu Pricing",
+  purchasing: "Purchasing",
+  reports: "Reports",
+  sales: "Sales",
+  sync: "Offline Sync",
+  transfers: "Transfers",
+};
+
+const viewActions = new Set(["login", "read", "refresh"]);
+const manageActions = new Set([
+  "create",
+  "dispatch",
+  "receive",
+  "run",
+  "submit",
+  "update",
+]);
+const sensitiveActions = new Set(["approve", "deactivate", "post"]);
+const sensitivePermissionKeys = new Set([
+  "admin.roles:update",
+  "admin.users:deactivate",
+  "admin.users:update",
+  "ledger.events:post",
+]);
+
+function buildPermissionGroups(permissions: AdminPermission[]) {
+  const groups = permissions.reduce<Record<string, PermissionGroup>>(
+    (result, permission) => {
+      const key = permission.module.split(".")[0];
+      result[key] = result[key] ?? {
+        key,
+        label: moduleLabels[key] ?? formatLabel(key),
+        permissions: [],
+      };
+      result[key].permissions.push(permission);
+      return result;
     },
     {},
   );
+
+  return Object.values(groups)
+    .map((group) => ({
+      ...group,
+      permissions: [...group.permissions].sort((left, right) =>
+        left.key.localeCompare(right.key),
+      ),
+    }))
+    .sort((left, right) => left.label.localeCompare(right.label));
+}
+
+function permissionMatchesAccessMode(
+  permission: AdminPermission,
+  mode: "none" | "view" | "manage" | "full",
+) {
+  if (mode === "none") {
+    return false;
+  }
+
+  if (mode === "full") {
+    return true;
+  }
+
+  if (mode === "view") {
+    return viewActions.has(permission.action);
+  }
+
+  return (
+    viewActions.has(permission.action) || manageActions.has(permission.action)
+  );
+}
+
+function groupAccessMatches(
+  permissions: AdminPermission[],
+  selectedIds: string[],
+  mode: "none" | "view" | "manage" | "full",
+) {
+  const expectedIds = permissions
+    .filter((permission) => permissionMatchesAccessMode(permission, mode))
+    .map((permission) => permission.id)
+    .sort();
+  const selectedGroupIds = permissions
+    .filter((permission) => selectedIds.includes(permission.id))
+    .map((permission) => permission.id)
+    .sort();
+
+  return expectedIds.join("|") === selectedGroupIds.join("|");
+}
+
+function describeGroupAccess(
+  permissions: AdminPermission[],
+  selectedIds: string[],
+) {
+  const selected = permissions.filter((permission) =>
+    selectedIds.includes(permission.id),
+  );
+
+  if (selected.length === 0) {
+    return "No access";
+  }
+
+  if (selected.length === permissions.length) {
+    return "Full access";
+  }
+
+  if (selected.every((permission) => viewActions.has(permission.action))) {
+    return "View-only access";
+  }
+
+  const selectedActions = selected.map((permission) =>
+    formatLabel(permission.action),
+  );
+
+  return `Custom access: ${uniqueStrings(selectedActions).join(", ")}`;
+}
+
+function filterPermissions(
+  permissions: AdminPermission[],
+  selectedIds: string[],
+  originalIds: string[],
+  search: string,
+  filter: "all" | "enabled" | "changed",
+) {
+  const normalizedSearch = search.trim().toLowerCase();
+
+  return permissions.filter((permission) => {
+    const selected = selectedIds.includes(permission.id);
+    const changed = selected !== originalIds.includes(permission.id);
+    const searchText = [
+      permission.action,
+      permission.description,
+      permission.key,
+      permission.module,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+
+    return (
+      (!normalizedSearch || searchText.includes(normalizedSearch)) &&
+      (filter !== "enabled" || selected) &&
+      (filter !== "changed" || changed)
+    );
+  });
+}
+
+function permissionGroupVisible(
+  group: PermissionGroup,
+  selectedIds: string[],
+  originalIds: string[],
+  search: string,
+  filter: "all" | "enabled" | "changed",
+) {
+  const normalizedSearch = search.trim().toLowerCase();
+  const groupMatchesSearch =
+    !normalizedSearch || group.label.toLowerCase().includes(normalizedSearch);
+
+  if (groupMatchesSearch && filter === "all") {
+    return true;
+  }
+
+  if (groupMatchesSearch && filter === "enabled") {
+    return group.permissions.some((permission) =>
+      selectedIds.includes(permission.id),
+    );
+  }
+
+  if (groupMatchesSearch && filter === "changed") {
+    return group.permissions.some(
+      (permission) =>
+        selectedIds.includes(permission.id) !==
+        originalIds.includes(permission.id),
+    );
+  }
+
+  return (
+    filterPermissions(
+      group.permissions,
+      selectedIds,
+      originalIds,
+      search,
+      filter,
+    ).length > 0
+  );
+}
+
+function isSensitivePermission(permission: AdminPermission) {
+  return (
+    sensitiveActions.has(permission.action) ||
+    sensitivePermissionKeys.has(permission.key)
+  );
+}
+
+function formatPermissionName(permission: AdminPermission) {
+  const modulePart = permission.module.includes(".")
+    ? permission.module.split(".").slice(1).join(" ")
+    : permission.module;
+
+  return `${formatLabel(permission.action)} ${formatLabel(modulePart)}`;
+}
+
+function uniqueIds(ids: string[]) {
+  return Array.from(new Set(ids));
+}
+
+function uniqueStrings(values: string[]) {
+  return Array.from(new Set(values));
+}
+
+function formatLabel(value: string) {
+  return value
+    .replaceAll("-", " ")
+    .replaceAll("_", " ")
+    .split(" ")
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
 }
 
 function filterAuditLogs(auditLogs: AuditLog[], filters: AuditFilters) {
@@ -1721,6 +2130,16 @@ function uniqueAuditOptions(values: string[]) {
 
 function defaultRoleId(roles: AdminRole[]) {
   return roles.find((role) => role.code === "ADMIN")?.id ?? roles[0]?.id ?? "";
+}
+
+function normalizeRoleId(value: string, roles: AdminRole[]) {
+  const role = roles.find(
+    (candidate) =>
+      candidate.id === value ||
+      candidate.code.toLowerCase() === value.toLowerCase(),
+  );
+
+  return role?.id ?? value;
 }
 
 function text(value: unknown) {
