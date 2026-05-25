@@ -30,8 +30,11 @@ export class PurchasingController {
   @Get("purchase-orders")
   @Permissions("purchasing.purchase-orders:read")
   @LocationAccess({ source: "query", key: "locationId" })
-  listPurchaseOrders(@Query() query: Record<string, string>) {
-    return this.purchasingService.list("purchase-orders", query);
+  listPurchaseOrders(
+    @Query() query: Record<string, string>,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.purchasingService.list("purchase-orders", query, user);
   }
 
   @Get("supplier-item-cost")
@@ -74,8 +77,11 @@ export class PurchasingController {
 
   @Get("purchase-orders/:id")
   @Permissions("purchasing.purchase-orders:read")
-  getPurchaseOrder(@Param("id") id: string) {
-    return this.purchasingService.list("purchase-orders.detail", { id });
+  getPurchaseOrder(
+    @Param("id") id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.purchasingService.list("purchase-orders.detail", { id }, user);
   }
 
   @Post("purchase-orders/:id/submit")
@@ -149,7 +155,10 @@ export class PurchasingController {
 
   @Get("receivings/:id")
   @Permissions("purchasing.receivings:read")
-  getReceiving(@Param("id") id: string) {
-    return this.purchasingService.list("receivings.detail", { id });
+  getReceiving(
+    @Param("id") id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.purchasingService.list("receivings.detail", { id }, user);
   }
 }

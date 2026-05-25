@@ -49,10 +49,10 @@ export class MenuPricingService {
     private readonly prisma: PrismaService,
   ) {}
 
-  async list(query: Record<string, string> = {}) {
+  async list(query: Record<string, string> = {}, user: AuthenticatedUser) {
     const rows = await this.prisma.menuPrice.findMany({
       where: {
-        locationId: query.locationId || undefined,
+        ...this.locationWhere(query.locationId, user),
         status: query.status as PriceStatus | undefined,
       },
       include: menuPriceInclude,
@@ -410,6 +410,25 @@ export class MenuPricingService {
         `Only warehouse or HQ users can ${action} menu pricing.`,
       );
     }
+  }
+
+  private assertLocationAccess(user: AuthenticatedUser, locationId: string) {
+    if (!user.locationIds.includes(locationId)) {
+      throw new ForbiddenException("Location access denied.");
+    }
+  }
+
+  private locationWhere(locationId?: string, user?: AuthenticatedUser) {
+    if (locationId) {
+      if (user) {
+        this.assertLocationAccess(user, locationId);
+      }
+      return { locationId };
+    }
+
+    return user
+      ? { OR: [{ locationId: null }, { locationId: { in: user.locationIds } }] }
+      : {};
   }
 
   private channel(value?: string) {

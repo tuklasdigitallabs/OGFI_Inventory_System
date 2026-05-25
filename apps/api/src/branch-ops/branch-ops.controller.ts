@@ -34,8 +34,11 @@ export class BranchOpsController {
   @Get("wastage")
   @Permissions("branch.wastage:read")
   @LocationAccess({ source: "query", key: "locationId" })
-  listWastage(@Query() query: Record<string, string>) {
-    return this.branchOpsService.list("wastage", query);
+  listWastage(
+    @Query() query: Record<string, string>,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.branchOpsService.list("wastage", query, user);
   }
 
   @Post("stock-counts")
@@ -55,14 +58,20 @@ export class BranchOpsController {
   @Get("stock-counts")
   @Permissions("branch.stock-counts:read")
   @LocationAccess({ source: "query", key: "locationId" })
-  listStockCounts(@Query() query: Record<string, string>) {
-    return this.branchOpsService.list("stock-counts", query);
+  listStockCounts(
+    @Query() query: Record<string, string>,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.branchOpsService.list("stock-counts", query, user);
   }
 
   @Get("stock-counts/:id")
   @Permissions("branch.stock-counts:read")
-  getStockCount(@Param("id") id: string) {
-    return this.branchOpsService.list("stock-counts.detail", { id });
+  getStockCount(
+    @Param("id") id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.branchOpsService.list("stock-counts.detail", { id }, user);
   }
 
   @Post("issues")
@@ -82,8 +91,11 @@ export class BranchOpsController {
   @Get("issues")
   @Permissions("branch.issues:read")
   @LocationAccess({ source: "query", key: "locationId" })
-  listIssues(@Query() query: Record<string, string>) {
-    return this.branchOpsService.list("issues", query);
+  listIssues(
+    @Query() query: Record<string, string>,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.branchOpsService.list("issues", query, user);
   }
 
   @Post("emergency-purchases")
@@ -103,8 +115,11 @@ export class BranchOpsController {
   @Get("emergency-purchases")
   @Permissions("branch.emergency-purchases:read")
   @LocationAccess({ source: "query", key: "locationId" })
-  listEmergencyPurchases(@Query() query: Record<string, string>) {
-    return this.branchOpsService.list("emergency-purchases", query);
+  listEmergencyPurchases(
+    @Query() query: Record<string, string>,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.branchOpsService.list("emergency-purchases", query, user);
   }
 
   @Post("sales-batches")
@@ -124,7 +139,10 @@ export class BranchOpsController {
   @Get("sales-batches")
   @Permissions("branch.sales-batches:read")
   @LocationAccess({ source: "query", key: "locationId" })
-  listSalesBatches(@Query() query: Record<string, string>) {
-    return this.branchOpsService.list("sales-batches", query);
+  listSalesBatches(
+    @Query() query: Record<string, string>,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.branchOpsService.list("sales-batches", query, user);
   }
 }

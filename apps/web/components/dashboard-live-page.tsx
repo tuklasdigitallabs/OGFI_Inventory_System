@@ -11,7 +11,7 @@ import { offlineQueueCount } from "@/lib/offline-db";
 import type { Kpi, Screen } from "@/lib/screens";
 import {
   ApiClient,
-  TOKEN_KEY,
+  getSessionAccessToken,
   type LedgerMovementRow,
   type BranchOperationRecord,
   type MenuPrice,
@@ -61,7 +61,7 @@ export function DashboardLivePage({ screen }: DashboardLivePageProps) {
     let cancelled = false;
 
     async function loadStockSummary() {
-      const token = window.localStorage.getItem(TOKEN_KEY);
+      const token = getSessionAccessToken();
 
       if (!token) {
         setState(emptyDashboardState(false));

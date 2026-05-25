@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -39,6 +40,17 @@ import {
 } from "./dto/master-data.dto";
 import { MasterDataImportService } from "./master-data-import.service";
 import { MasterDataService } from "./master-data.service";
+
+const importFileMaxSizeBytes = 5 * 1024 * 1024;
+const xlsxMimeType =
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+type UploadedWorkbook = {
+  buffer?: Buffer;
+  mimetype?: string;
+  originalname?: string;
+  size?: number;
+};
 
 @Controller("admin")
 export class MasterDataController {
@@ -90,9 +102,11 @@ export class MasterDataController {
     "master-data.recipes:create",
     "master-data.recipes:update",
   )
-  @UseInterceptors(FileInterceptor("file"))
+  @UseInterceptors(
+    FileInterceptor("file", { limits: { fileSize: importFileMaxSizeBytes } }),
+  )
   importMasterData(
-    @UploadedFile() file: { buffer?: Buffer } | undefined,
+    @UploadedFile() file: UploadedWorkbook | undefined,
     @CurrentUser() user: AuthenticatedUser,
     @Req() request: Request,
   ) {
@@ -114,6 +128,8 @@ export class MasterDataController {
         updated: 0,
       };
     }
+
+    this.assertXlsxUpload(file);
 
     return this.masterDataImportService.importWorkbook(
       file.buffer,
@@ -601,5 +617,17 @@ export class MasterDataController {
       ipAddress: request.ip,
       userAgent: request.headers["user-agent"],
     };
+  }
+
+  private assertXlsxUpload(file: UploadedWorkbook) {
+    const hasXlsxExtension = file.originalname?.toLowerCase().endsWith(".xlsx");
+
+    if (file.size && file.size > importFileMaxSizeBytes) {
+      throw new BadRequestException("Upload file must be 5 MB or smaller.");
+    }
+
+    if (file.mimetype !== xlsxMimeType || !hasXlsxExtension) {
+      throw new BadRequestException("Upload a valid .xlsx workbook.");
+    }
   }
 }

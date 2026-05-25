@@ -19,8 +19,11 @@ export class MenuPricingController {
 
   @Get()
   @Permissions("menu-pricing:read")
-  list(@Query() query: Record<string, string>) {
-    return this.menuPricingService.list(query);
+  list(
+    @Query() query: Record<string, string>,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.menuPricingService.list(query, user);
   }
 
   @Post()

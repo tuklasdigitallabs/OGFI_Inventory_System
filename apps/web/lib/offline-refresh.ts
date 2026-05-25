@@ -1,6 +1,6 @@
 "use client";
 
-import { ApiClient, TOKEN_KEY, type MasterDataResource } from "./api-client";
+import { ApiClient, getSessionAccessToken, type MasterDataResource } from "./api-client";
 import { setCachedValue } from "./offline-db";
 
 export const OFFLINE_REFRESH_KEY = "ogfi.offlineRefresh.lastCompletedAt";
@@ -18,7 +18,7 @@ const masterResources: MasterDataResource[] = [
 ];
 
 export async function refreshOfflineData() {
-  const token = window.localStorage.getItem(TOKEN_KEY);
+  const token = getSessionAccessToken();
 
   if (!token || !window.navigator.onLine) {
     return null;

@@ -13,6 +13,7 @@ import {
 } from "@prisma/client";
 import { randomUUID } from "crypto";
 import { AuthenticatedUser } from "../auth/types";
+import { nextBusinessDocumentNumber } from "../common/document-numbering";
 import { CostingService } from "../costing/costing.service";
 import { LedgerService } from "../ledger/ledger.service";
 import { PrismaService } from "../prisma/prisma.service";
@@ -48,11 +49,25 @@ export class TransfersService {
     private readonly costingService: CostingService,
   ) {}
 
-  async list(query: Record<string, string> = {}) {
+  async list(query: Record<string, string> = {}, user: AuthenticatedUser) {
+    if (query.sourceLocationId) {
+      this.assertUserCanAccessLocation(user, query.sourceLocationId);
+    }
+    if (query.targetLocationId) {
+      this.assertUserCanAccessLocation(user, query.targetLocationId);
+    }
+
     const transfers = await this.prisma.transfer.findMany({
       where: {
         sourceLocationId: query.sourceLocationId,
         targetLocationId: query.targetLocationId,
+        OR:
+          query.sourceLocationId || query.targetLocationId
+            ? undefined
+            : [
+                { sourceLocationId: { in: user.locationIds } },
+                { targetLocationId: { in: user.locationIds } },
+              ],
         status: query.status as TransferStatus | undefined,
       },
       include: transferInclude,
@@ -69,7 +84,7 @@ export class TransfersService {
     };
   }
 
-  async getTransfer(id: string) {
+  async getTransfer(id: string, user: AuthenticatedUser) {
     const transfer = await this.prisma.transfer.findUnique({
       where: { id },
       include: transferInclude,
@@ -78,11 +93,14 @@ export class TransfersService {
     if (!transfer) {
       throw new NotFoundException("Transfer not found.");
     }
+
+    this.assertUserCanAccessLocation(user, transfer.sourceLocationId);
+    this.assertUserCanAccessLocation(user, transfer.targetLocationId);
 
     return this.toResponse(transfer);
   }
 
-  async getVariance(id: string) {
+  async getVariance(id: string, user: AuthenticatedUser) {
     const transfer = await this.prisma.transfer.findUnique({
       where: { id },
       include: transferInclude,
@@ -91,6 +109,9 @@ export class TransfersService {
     if (!transfer) {
       throw new NotFoundException("Transfer not found.");
     }
+
+    this.assertUserCanAccessLocation(user, transfer.sourceLocationId);
+    this.assertUserCanAccessLocation(user, transfer.targetLocationId);
 
     return {
       transfer: this.toResponse(transfer),
@@ -266,61 +287,6 @@ export class TransfersService {
 
     const receivedByLineId = this.linesById(dto.lines, "receivedQty");
     this.validateReceiveLines(transfer, receivedByLineId);
-    const postedCosts = new Map<string, string>();
-
-    for (const line of transfer.lines) {
-      const receivedQty = receivedByLineId.get(line.id) ?? 0;
-
-      if (receivedQty <= 0) {
-        continue;
-      }
-
-      const outbound = await this.ledgerService.postEvent(
-        {
-          uuid: randomUUID(),
-          locationId: transfer.sourceLocationId,
-          itemId: line.itemId,
-          transactionType: TransactionType.TRANSFER_OUT,
-          qtyOut: receivedQty,
-          unitCostAtTime: Number(line.unitCost ?? 0),
-          referenceType: ReferenceType.TRANSFER,
-          referenceId: transfer.id,
-          businessDate: new Date().toISOString(),
-          approvedById: user.id,
-          metadata: {
-            transferNumber: transfer.transferNumber,
-            targetLocationId: transfer.targetLocationId,
-            receiveStep: "confirmed_transfer_out",
-          },
-        },
-        user,
-        metadata,
-      );
-      postedCosts.set(line.id, outbound.event.unitCostAtTime);
-
-      await this.ledgerService.postEvent(
-        {
-          uuid: randomUUID(),
-          locationId: transfer.targetLocationId,
-          itemId: line.itemId,
-          transactionType: TransactionType.TRANSFER_IN,
-          qtyIn: receivedQty,
-          unitCostAtTime: Number(line.unitCost ?? 0),
-          referenceType: ReferenceType.TRANSFER,
-          referenceId: transfer.id,
-          businessDate: new Date().toISOString(),
-          approvedById: user.id,
-          metadata: {
-            transferNumber: transfer.transferNumber,
-            sourceLocationId: transfer.sourceLocationId,
-            receiveStep: "confirmed_transfer_in",
-          },
-        },
-        user,
-        metadata,
-      );
-    }
-
     const hasVariance = transfer.lines.some((line) => {
       const pickedQty = Number(line.pickedQty ?? 0);
       const receivedQty = receivedByLineId.get(line.id) ?? 0;
@@ -328,6 +294,27 @@ export class TransfersService {
     });
 
     return this.prisma.$transaction(async (tx) => {
+      const postedCosts = new Map<string, string>();
+
+      for (const line of transfer.lines) {
+        const receivedQty = receivedByLineId.get(line.id) ?? 0;
+
+        if (receivedQty <= 0) {
+          continue;
+        }
+
+        const outbound = await this.postConfirmedTransferMovement(
+          tx,
+          transfer,
+          line,
+          new Prisma.Decimal(receivedQty),
+          user,
+          metadata,
+          "confirmed_transfer",
+        );
+        postedCosts.set(line.id, outbound.event.unitCostAtTime);
+      }
+
       for (const line of transfer.lines) {
         await tx.transferLine.update({
           where: { id: line.id },
@@ -395,57 +382,59 @@ export class TransfersService {
       throw new ConflictException("Transfer has no unresolved variance.");
     }
 
-    if (dto.resolution === "RECEIVE_BALANCE") {
-      for (const line of transfer.lines) {
-        const remainingQty = remainingByLineId.get(line.id);
-
-        if (!remainingQty) {
-          continue;
-        }
-
-        await this.postConfirmedTransferMovement(
-          transfer,
-          line,
-          remainingQty,
-          user,
-          metadata,
-          "variance_balance_received",
-        );
-      }
-    }
-
-    if (dto.resolution === "LOSS_AT_SOURCE") {
-      for (const line of transfer.lines) {
-        const remainingQty = remainingByLineId.get(line.id);
-
-        if (!remainingQty) {
-          continue;
-        }
-
-        await this.ledgerService.postEvent(
-          {
-            uuid: randomUUID(),
-            locationId: transfer.sourceLocationId,
-            itemId: line.itemId,
-            transactionType: TransactionType.ADJUSTMENT,
-            qtyOut: remainingQty.toNumber(),
-            unitCostAtTime: Number(line.unitCost ?? 0),
-            referenceType: ReferenceType.TRANSFER,
-            referenceId: transfer.id,
-            businessDate: new Date().toISOString(),
-            approvedById: user.id,
-            metadata: {
-              transferNumber: transfer.transferNumber,
-              resolution: dto.resolution,
-            },
-          },
-          user,
-          metadata,
-        );
-      }
-    }
-
     return this.prisma.$transaction(async (tx) => {
+      if (dto.resolution === "RECEIVE_BALANCE") {
+        for (const line of transfer.lines) {
+          const remainingQty = remainingByLineId.get(line.id);
+
+          if (!remainingQty) {
+            continue;
+          }
+
+          await this.postConfirmedTransferMovement(
+            tx,
+            transfer,
+            line,
+            remainingQty,
+            user,
+            metadata,
+            "variance_balance_received",
+          );
+        }
+      }
+
+      if (dto.resolution === "LOSS_AT_SOURCE") {
+        for (const line of transfer.lines) {
+          const remainingQty = remainingByLineId.get(line.id);
+
+          if (!remainingQty) {
+            continue;
+          }
+
+          await this.ledgerService.postEventInTransaction(
+            tx,
+            {
+              uuid: randomUUID(),
+              locationId: transfer.sourceLocationId,
+              itemId: line.itemId,
+              transactionType: TransactionType.ADJUSTMENT,
+              qtyOut: remainingQty.toNumber(),
+              unitCostAtTime: Number(line.unitCost ?? 0),
+              referenceType: ReferenceType.TRANSFER,
+              referenceId: transfer.id,
+              businessDate: new Date().toISOString(),
+              approvedById: user.id,
+              metadata: {
+                transferNumber: transfer.transferNumber,
+                resolution: dto.resolution,
+              },
+            },
+            user,
+            metadata,
+          );
+        }
+      }
+
       if (dto.resolution === "RECEIVE_BALANCE") {
         for (const line of transfer.lines) {
           if (!remainingByLineId.has(line.id)) {
@@ -683,6 +672,7 @@ export class TransfersService {
   }
 
   private async postConfirmedTransferMovement(
+    tx: Prisma.TransactionClient,
     transfer: Prisma.TransferGetPayload<{ include: typeof transferInclude }>,
     line: Prisma.TransferLineGetPayload<{
       include: { item: { include: { baseUom: true } } };
@@ -692,7 +682,8 @@ export class TransfersService {
     metadata: RequestAuditMetadata,
     receiveStep: string,
   ) {
-    await this.ledgerService.postEvent(
+    const outbound = await this.ledgerService.postEventInTransaction(
+      tx,
       {
         uuid: randomUUID(),
         locationId: transfer.sourceLocationId,
@@ -704,17 +695,18 @@ export class TransfersService {
         referenceId: transfer.id,
         businessDate: new Date().toISOString(),
         approvedById: user.id,
-        metadata: {
-          transferNumber: transfer.transferNumber,
-          targetLocationId: transfer.targetLocationId,
-          receiveStep,
-        },
+          metadata: {
+            transferNumber: transfer.transferNumber,
+            targetLocationId: transfer.targetLocationId,
+            receiveStep: `${receiveStep}_out`,
+          },
       },
       user,
       metadata,
     );
 
-    await this.ledgerService.postEvent(
+    await this.ledgerService.postEventInTransaction(
+      tx,
       {
         uuid: randomUUID(),
         locationId: transfer.targetLocationId,
@@ -726,15 +718,17 @@ export class TransfersService {
         referenceId: transfer.id,
         businessDate: new Date().toISOString(),
         approvedById: user.id,
-        metadata: {
-          transferNumber: transfer.transferNumber,
-          sourceLocationId: transfer.sourceLocationId,
-          receiveStep,
-        },
+          metadata: {
+            transferNumber: transfer.transferNumber,
+            sourceLocationId: transfer.sourceLocationId,
+            receiveStep: `${receiveStep}_in`,
+          },
       },
       user,
       metadata,
     );
+
+    return outbound;
   }
 
   private async currentAverageUnitCost(locationId: string, itemId: string) {
@@ -817,18 +811,7 @@ export class TransfersService {
   }
 
   private async nextTransferNumber(tx: Prisma.TransactionClient) {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-
-    const end = new Date(start);
-    end.setDate(end.getDate() + 1);
-
-    const count = await tx.transfer.count({
-      where: { createdAt: { gte: start, lt: end } },
-    });
-    const datePart = start.toISOString().slice(0, 10).replace(/-/g, "");
-
-    return `TR-${datePart}-${String(count + 1).padStart(4, "0")}`;
+    return nextBusinessDocumentNumber(tx, "TR");
   }
 
   private assertUserCanAccessLocation(

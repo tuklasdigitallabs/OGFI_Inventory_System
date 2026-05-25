@@ -15,6 +15,7 @@ import {
 } from "@prisma/client";
 import { randomUUID } from "crypto";
 import { AuthenticatedUser } from "../auth/types";
+import { nextBusinessDocumentNumber } from "../common/document-numbering";
 import { CostingService, InventoryState } from "../costing/costing.service";
 import { PrismaService } from "../prisma/prisma.service";
 import {
@@ -78,11 +79,15 @@ export class LedgerService {
     private readonly costingService: CostingService,
   ) {}
 
-  async list(resource: string, query: Record<string, string> = {}) {
+  async list(
+    resource: string,
+    query: Record<string, string> = {},
+    user?: AuthenticatedUser,
+  ) {
     if (resource === "inventory.stock-on-hand") {
       const events = await this.prisma.ledgerEvent.findMany({
         where: {
-          locationId: query.locationId,
+          locationId: this.locationFilter(query.locationId, user),
           itemId: query.itemId,
         },
         include: {
@@ -108,7 +113,7 @@ export class LedgerService {
     if (resource === "inventory.movements") {
       const events = await this.prisma.ledgerEvent.findMany({
         where: {
-          locationId: query.locationId,
+          locationId: this.locationFilter(query.locationId, user),
           itemId: query.itemId,
           transactionType: query.transactionType as TransactionType | undefined,
         },
@@ -125,7 +130,7 @@ export class LedgerService {
     if (resource === "inventory.adjustment-requests") {
       const requests = await this.prisma.adjustmentRequest.findMany({
         where: {
-          locationId: query.locationId,
+          locationId: this.locationFilter(query.locationId, user),
           status: query.status as DocumentStatus | undefined,
         },
         include: {
@@ -155,6 +160,10 @@ export class LedgerService {
         throw new NotFoundException("Ledger event not found.");
       }
 
+      if (user) {
+        this.assertUserCanAccessLocation(user, event.locationId);
+      }
+
       return this.toResponse(event);
     }
 
@@ -170,85 +179,96 @@ export class LedgerService {
     user: AuthenticatedUser,
     metadata: RequestAuditMetadata = {},
   ) {
-    return this.prisma.$transaction(async (tx) => {
-      const existing = await tx.ledgerEvent.findUnique({
-        where: { uuid: dto.uuid },
-      });
+    return this.prisma.$transaction((tx) =>
+      this.postEventInTransaction(tx, dto, user, metadata),
+    );
+  }
 
-      if (existing) {
-        return {
-          status: "already_posted",
-          idempotent: true,
-          event: this.toResponse(existing),
-        };
-      }
+  async postEventInTransaction(
+    tx: Prisma.TransactionClient,
+    dto: PostLedgerEventDto,
+    user: AuthenticatedUser,
+    metadata: RequestAuditMetadata = {},
+  ) {
+    await this.lockLedgerItem(tx, dto.locationId, dto.itemId);
 
-      this.assertUserCanAccessLocation(user, dto.locationId);
-
-      const quantities = this.validateQuantities(
-        dto.transactionType,
-        dto.qtyIn,
-        dto.qtyOut,
-      );
-
-      await this.validatePostTargets(
-        tx,
-        dto.locationId,
-        dto.itemId,
-        dto.approvedById,
-        dto.reasonCodeId,
-      );
-      await this.validateReference(tx, dto.referenceType, dto.referenceId);
-
-      const currentState = await this.getCurrentState(
-        tx,
-        dto.locationId,
-        dto.itemId,
-      );
-      this.enforceNegativeStockPolicy(quantities.qtyOut, currentState);
-
-      const unitCostAtTime = await this.resolveUnitCostAtTime(
-        tx,
-        dto,
-        quantities.qtyOut,
-        currentState,
-      );
-      const extendedCost = quantities.movementQty.mul(unitCostAtTime);
-
-      const event = await tx.ledgerEvent.create({
-        data: {
-          uuid: dto.uuid,
-          locationId: dto.locationId,
-          itemId: dto.itemId,
-          transactionType: dto.transactionType,
-          qtyIn: quantities.qtyIn,
-          qtyOut: quantities.qtyOut,
-          unitCostAtTime,
-          extendedCost,
-          referenceType: dto.referenceType,
-          referenceId: dto.referenceId,
-          businessDate: new Date(dto.businessDate),
-          createdById: user.id,
-          approvedById: dto.approvedById,
-          metadata: this.toJsonInput(dto.metadata),
-        },
-      });
-
-      await this.recordAudit(
-        tx,
-        "ledger.events.posted",
-        event,
-        user,
-        metadata,
-        dto.reasonCodeId,
-      );
-
-      return {
-        status: "posted",
-        idempotent: false,
-        event: this.toResponse(event),
-      };
+    const existing = await tx.ledgerEvent.findUnique({
+      where: { uuid: dto.uuid },
     });
+
+    if (existing) {
+      return {
+        status: "already_posted",
+        idempotent: true,
+        event: this.toResponse(existing),
+      };
+    }
+
+    this.assertUserCanAccessLocation(user, dto.locationId);
+
+    const quantities = this.validateQuantities(
+      dto.transactionType,
+      dto.qtyIn,
+      dto.qtyOut,
+    );
+
+    await this.validatePostTargets(
+      tx,
+      dto.locationId,
+      dto.itemId,
+      dto.approvedById,
+      dto.reasonCodeId,
+    );
+    await this.validateReference(tx, dto.referenceType, dto.referenceId);
+
+    const currentState = await this.getCurrentState(
+      tx,
+      dto.locationId,
+      dto.itemId,
+    );
+    this.enforceNegativeStockPolicy(quantities.qtyOut, currentState);
+
+    const unitCostAtTime = await this.resolveUnitCostAtTime(
+      tx,
+      dto,
+      quantities.qtyOut,
+      currentState,
+    );
+    const extendedCost = quantities.movementQty.mul(unitCostAtTime);
+
+    const event = await tx.ledgerEvent.create({
+      data: {
+        uuid: dto.uuid,
+        locationId: dto.locationId,
+        itemId: dto.itemId,
+        transactionType: dto.transactionType,
+        qtyIn: quantities.qtyIn,
+        qtyOut: quantities.qtyOut,
+        unitCostAtTime,
+        extendedCost,
+        referenceType: dto.referenceType,
+        referenceId: dto.referenceId,
+        businessDate: new Date(dto.businessDate),
+        createdById: user.id,
+        approvedById: dto.approvedById,
+        metadata: this.toJsonInput(dto.metadata),
+      },
+    });
+
+    await this.recordAudit(
+      tx,
+      "ledger.events.posted",
+      event,
+      user,
+      metadata,
+      dto.reasonCodeId,
+    );
+
+    return {
+      status: "posted",
+      idempotent: false,
+      event: this.toResponse(event),
+    };
   }
 
   async createAdjustmentRequest(
@@ -324,56 +344,60 @@ export class LedgerService {
     user: AuthenticatedUser,
     metadata: RequestAuditMetadata = {},
   ) {
-    const request = await this.prisma.adjustmentRequest.findUnique({
-      where: { id },
-      include: {
-        item: { include: { baseUom: true } },
-        location: true,
-        reasonCode: true,
-        requestedBy: true,
-        approvedBy: true,
-        rejectedBy: true,
-      },
-    });
-
-    if (!request) {
-      throw new NotFoundException("Adjustment request not found.");
-    }
-
-    this.assertUserCanAccessLocation(user, request.locationId);
-
-    if (request.status !== DocumentStatus.PENDING_APPROVAL) {
-      throw new ConflictException(
-        "Only pending adjustment requests can be approved.",
-      );
-    }
-
-    const posted = await this.postEvent(
-      {
-        uuid: randomUUID(),
-        locationId: request.locationId,
-        itemId: request.itemId,
-        transactionType: TransactionType.ADJUSTMENT,
-        qtyIn: request.qtyIn.toNumber() > 0 ? request.qtyIn.toNumber() : undefined,
-        qtyOut:
-          request.qtyOut.toNumber() > 0 ? request.qtyOut.toNumber() : undefined,
-        unitCostAtTime: request.unitCostAtTime.toNumber(),
-        referenceType: ReferenceType.ADJUSTMENT,
-        referenceId: request.id,
-        businessDate: request.businessDate.toISOString(),
-        approvedById: user.id,
-        reasonCodeId: request.reasonCodeId,
-        metadata: {
-          adjustmentRequestNumber: request.requestNumber,
-          requestedById: request.requestedById,
-          remarks: request.remarks,
-        },
-      },
-      user,
-      metadata,
-    );
-
     const updated = await this.prisma.$transaction(async (tx) => {
+      const request = await tx.adjustmentRequest.findUnique({
+        where: { id },
+        include: {
+          item: { include: { baseUom: true } },
+          location: true,
+          reasonCode: true,
+          requestedBy: true,
+          approvedBy: true,
+          rejectedBy: true,
+        },
+      });
+
+      if (!request) {
+        throw new NotFoundException("Adjustment request not found.");
+      }
+
+      this.assertUserCanAccessLocation(user, request.locationId);
+
+      if (request.status !== DocumentStatus.PENDING_APPROVAL) {
+        throw new ConflictException(
+          "Only pending adjustment requests can be approved.",
+        );
+      }
+
+      const posted = await this.postEventInTransaction(
+        tx,
+        {
+          uuid: randomUUID(),
+          locationId: request.locationId,
+          itemId: request.itemId,
+          transactionType: TransactionType.ADJUSTMENT,
+          qtyIn:
+            request.qtyIn.toNumber() > 0 ? request.qtyIn.toNumber() : undefined,
+          qtyOut:
+            request.qtyOut.toNumber() > 0
+              ? request.qtyOut.toNumber()
+              : undefined,
+          unitCostAtTime: request.unitCostAtTime.toNumber(),
+          referenceType: ReferenceType.ADJUSTMENT,
+          referenceId: request.id,
+          businessDate: request.businessDate.toISOString(),
+          approvedById: user.id,
+          reasonCodeId: request.reasonCodeId,
+          metadata: {
+            adjustmentRequestNumber: request.requestNumber,
+            requestedById: request.requestedById,
+            remarks: request.remarks,
+          },
+        },
+        user,
+        metadata,
+      );
+
       const approved = await tx.adjustmentRequest.update({
         where: { id },
         data: {
@@ -508,6 +532,8 @@ export class LedgerService {
       const referenceType = dto.referenceType ?? original.referenceType;
       const referenceId = dto.referenceId ?? original.referenceId;
 
+      await this.lockLedgerItem(tx, original.locationId, original.itemId);
+
       await this.validatePostTargets(
         tx,
         original.locationId,
@@ -584,6 +610,16 @@ export class LedgerService {
     return this.costingService.calculateState(events);
   }
 
+  private async lockLedgerItem(
+    tx: Prisma.TransactionClient,
+    locationId: string,
+    itemId: string,
+  ) {
+    await tx.$queryRaw`
+      SELECT pg_advisory_xact_lock(hashtextextended(${`${locationId}:${itemId}`}, 0))
+    `;
+  }
+
   private async resolveUnitCostAtTime(
     tx: Prisma.TransactionClient,
     dto: PostLedgerEventDto,
@@ -649,6 +685,17 @@ export class LedgerService {
     if (!user.locationIds.includes(locationId)) {
       throw new ForbiddenException("Location access denied.");
     }
+  }
+
+  private locationFilter(locationId?: string, user?: AuthenticatedUser) {
+    if (locationId) {
+      if (user) {
+        this.assertUserCanAccessLocation(user, locationId);
+      }
+      return locationId;
+    }
+
+    return user ? { in: user.locationIds } : undefined;
   }
 
   private validateQuantities(
@@ -835,18 +882,7 @@ export class LedgerService {
   }
 
   private async nextAdjustmentRequestNumber(tx: Prisma.TransactionClient) {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-
-    const end = new Date(start);
-    end.setDate(end.getDate() + 1);
-
-    const count = await tx.adjustmentRequest.count({
-      where: { createdAt: { gte: start, lt: end } },
-    });
-    const datePart = start.toISOString().slice(0, 10).replace(/-/g, "");
-
-    return `ADJ-${datePart}-${String(count + 1).padStart(4, "0")}`;
+    return nextBusinessDocumentNumber(tx, "ADJ");
   }
 
   private async recordAudit(

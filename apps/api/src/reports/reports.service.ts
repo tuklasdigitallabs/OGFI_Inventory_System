@@ -16,6 +16,7 @@ type ReportRunResponse = {
   format: ReportFormat;
   parameters: Prisma.JsonValue;
   outputUrl: string | null;
+  outputContent?: string | null;
   error: string | null;
   requestedById: string | null;
   startedAt: string | null;
@@ -90,12 +91,14 @@ export class ReportsService {
         format: ReportFormat.CSV,
         parameters: parameters as Prisma.InputJsonValue,
         requestedById: user.id,
+        scopeLocationIds: parameters.locationIds,
         startedAt,
       },
     });
 
     try {
-      await this.buildReport(dto.reportKey, parameters);
+      const report = await this.buildReport(dto.reportKey, parameters);
+      const outputContent = toCsv(report);
 
       const completed = await this.prisma.reportRun.update({
         where: { id: run.id },
@@ -103,6 +106,7 @@ export class ReportsService {
           status: ReportStatus.COMPLETED,
           completedAt: new Date(),
           outputUrl: `/api/reports/runs/${run.id}/download`,
+          outputContent,
         },
       });
 
@@ -133,7 +137,14 @@ export class ReportsService {
       : undefined;
 
     const runs = await this.prisma.reportRun.findMany({
-      where: { reportKey, status },
+      where: {
+        reportKey,
+        status,
+        OR: [
+          { scopeLocationIds: { hasSome: user.locationIds } },
+          { scopeLocationIds: { isEmpty: true } },
+        ],
+      },
       orderBy: { createdAt: "desc" },
       take: this.parseTake(query.take),
     });
@@ -159,15 +170,19 @@ export class ReportsService {
       throw new BadRequestException("Report is not ready for download.");
     }
 
-    const report = await this.buildReport(
-      run.reportKey as ReportKey,
-      run.parameters as ReportParameters,
-    );
+    const content =
+      run.outputContent ??
+      toCsv(
+        await this.buildReport(
+          run.reportKey as ReportKey,
+          run.parameters as ReportParameters,
+        ),
+      );
 
     return {
       filename: `${run.reportKey}-${formatDateForFilename(run.createdAt)}.csv`,
       contentType: "text/csv",
-      content: toCsv(report),
+      content,
     };
   }
 

@@ -8,6 +8,21 @@ export const API_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3000/api";
 
 export const TOKEN_KEY = "ogfi.accessToken";
+export const REFRESH_TOKEN_KEY = "ogfi.refreshToken";
+
+export function getSessionAccessToken() {
+  return window.sessionStorage.getItem(TOKEN_KEY);
+}
+
+export function setSessionAccessToken(token: string) {
+  window.sessionStorage.setItem(TOKEN_KEY, token);
+}
+
+export function clearSessionAccessToken() {
+  window.sessionStorage.removeItem(TOKEN_KEY);
+  window.localStorage.removeItem(TOKEN_KEY);
+  window.localStorage.removeItem(REFRESH_TOKEN_KEY);
+}
 
 export type AuthenticatedUser = {
   id: string;
@@ -441,6 +456,10 @@ export type AdminUser = {
   updatedAt: string;
 };
 
+export type ProvisionedAdminUser = AdminUser & {
+  temporaryPassword: string;
+};
+
 export type AdminRole = {
   id: string;
   code: string;
@@ -494,10 +513,15 @@ type ApiMutationResponse<T> = {
   data: T;
 };
 
+type AuthSessionResponse = {
+  accessToken: string;
+  user: AuthenticatedUser;
+};
+
 const referenceCacheTtlMs = 5 * 60 * 1000;
 
 export class ApiClient {
-  constructor(private readonly accessToken: string) {}
+  constructor(private accessToken: string) {}
 
   currentUser() {
     return this.request<AuthenticatedUser>("/auth/me");
@@ -511,6 +535,12 @@ export class ApiClient {
     return this.request<OfflinePinStatus>("/auth/offline-pin/verify", {
       body: JSON.stringify({ pin }),
       headers: { "Content-Type": "application/json" },
+      method: "POST",
+    });
+  }
+
+  logout() {
+    return this.request<{ status: string }>("/auth/logout", {
       method: "POST",
     });
   }
@@ -1002,7 +1032,7 @@ export class ApiClient {
   }
 
   createAdminUser(payload: Record<string, unknown>) {
-    return this.request<AdminUser>("/admin/users", {
+    return this.request<ProvisionedAdminUser>("/admin/users", {
       body: JSON.stringify(payload),
       headers: { "Content-Type": "application/json" },
       method: "POST",
@@ -1024,7 +1054,7 @@ export class ApiClient {
   }
 
   resetAdminUserPassword(id: string) {
-    return this.request<AdminUser>(`/admin/users/${id}/reset-password`, {
+    return this.request<ProvisionedAdminUser>(`/admin/users/${id}/reset-password`, {
       method: "POST",
     });
   }
@@ -1110,14 +1140,27 @@ export class ApiClient {
       }
     }
 
-    const response = await fetch(`${API_URL}${path}`, {
+    let response = await fetch(`${API_URL}${path}`, {
       ...fetchInit,
       cache: "no-store",
+      credentials: "include",
       headers: {
         ...(fetchInit.headers ?? {}),
         Authorization: `Bearer ${this.accessToken}`,
       },
     });
+
+    if (response.status === 401 && await this.refreshAccessToken()) {
+      response = await fetch(`${API_URL}${path}`, {
+        ...fetchInit,
+        cache: "no-store",
+        credentials: "include",
+        headers: {
+          ...(fetchInit.headers ?? {}),
+          Authorization: `Bearer ${this.accessToken}`,
+        },
+      });
+    }
 
     if (!response.ok) {
       throw new Error(await this.toErrorMessage(response));
@@ -1134,6 +1177,30 @@ export class ApiClient {
 
   private cacheKey(path: string) {
     return `api:${path}`;
+  }
+
+  private async refreshAccessToken() {
+    if (typeof window === "undefined") {
+      return false;
+    }
+
+    const response = await fetch(`${API_URL}/auth/refresh`, {
+      cache: "no-store",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    });
+
+    if (!response.ok) {
+      clearSessionAccessToken();
+      return false;
+    }
+
+    const session = (await response.json()) as AuthSessionResponse;
+    this.accessToken = session.accessToken;
+    setSessionAccessToken(session.accessToken);
+
+    return true;
   }
 
   private async freshCachedValue<T>(key: string, ttlMs: number) {

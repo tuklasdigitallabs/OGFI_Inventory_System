@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   ApiClient,
-  TOKEN_KEY,
+  getSessionAccessToken,
   type AuthenticatedUser,
   type MasterDataRecord,
   type ReportCatalogItem,
@@ -61,7 +61,7 @@ export function ReportsLivePage({ screen }: ReportsLivePageProps) {
     let cancelled = false;
 
     async function loadReports() {
-      const token = window.localStorage.getItem(TOKEN_KEY);
+      const token = getSessionAccessToken();
 
       if (!token) {
         setState({
@@ -496,7 +496,7 @@ function buildReportKpis(runs: ReportRun[], loading: boolean): Kpi[] {
 }
 
 async function clientFromSession() {
-  const token = window.localStorage.getItem(TOKEN_KEY);
+  const token = getSessionAccessToken();
 
   if (!token) {
     throw new Error("Sign in again to continue.");

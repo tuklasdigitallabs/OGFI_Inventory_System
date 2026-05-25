@@ -19,8 +19,11 @@ export class TransfersController {
 
   @Get()
   @Permissions("transfers:read")
-  listTransfers(@Query() query: Record<string, string>) {
-    return this.transfersService.list(query);
+  listTransfers(
+    @Query() query: Record<string, string>,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.transfersService.list(query, user);
   }
 
   @Post()
@@ -42,8 +45,11 @@ export class TransfersController {
 
   @Get(":id")
   @Permissions("transfers:read")
-  getTransfer(@Param("id") id: string) {
-    return this.transfersService.getTransfer(id);
+  getTransfer(
+    @Param("id") id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.transfersService.getTransfer(id, user);
   }
 
   @Post(":id/approve")
@@ -104,7 +110,10 @@ export class TransfersController {
 
   @Get(":id/variance")
   @Permissions("transfers:read")
-  getVariance(@Param("id") id: string) {
-    return this.transfersService.getVariance(id);
+  getVariance(
+    @Param("id") id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.transfersService.getVariance(id, user);
   }
 }

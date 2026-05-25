@@ -61,6 +61,7 @@ function makeEvent(overrides: Record<string, unknown> = {}) {
 
 function makeTx() {
   const tx = {
+    $queryRaw: jest.fn().mockResolvedValue([]),
     ledgerEvent: {
       findUnique: jest.fn(),
       findMany: jest.fn().mockResolvedValue([]),
@@ -318,7 +319,7 @@ describe("LedgerService", () => {
 
     const result = (await service.list("inventory.stock-on-hand", {
       locationId: baseLocationId,
-    })) as unknown as { data: Array<Record<string, string>> };
+    }, user)) as unknown as { data: Array<Record<string, string>> };
 
     expect(result.data).toEqual([
       expect.objectContaining({
@@ -329,6 +330,32 @@ describe("LedgerService", () => {
         inventoryValue: "225",
       }),
     ]);
+  });
+
+  it("defaults inventory lists to the user's allowed locations", async () => {
+    const { service, prisma } = makeService();
+    prisma.ledgerEvent.findMany.mockResolvedValue([]);
+
+    await service.list("inventory.movements", {}, user);
+
+    expect(prisma.ledgerEvent.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          locationId: { in: user.locationIds },
+        }),
+      }),
+    );
+  });
+
+  it("rejects ledger event detail outside the user's locations", async () => {
+    const { service, prisma } = makeService();
+    prisma.ledgerEvent.findUnique.mockResolvedValue(
+      makeEvent({ locationId: "99999999-9999-9999-9999-999999999999" }),
+    );
+
+    await expect(
+      service.list("ledger.events.detail", { id: "event-id" }, user),
+    ).rejects.toThrow("Location access denied.");
   });
 
   it("uses the current moving average cost for outbound events", async () => {
@@ -368,6 +395,34 @@ describe("LedgerService", () => {
           extendedCost: new Prisma.Decimal(75),
         }),
       }),
+    );
+  });
+
+  it("takes a transaction advisory lock before reading stock state", async () => {
+    const { service, tx } = makeService();
+    tx.ledgerEvent.findUnique.mockResolvedValue(null);
+    tx.ledgerEvent.findMany.mockResolvedValue([
+      makeEvent({
+        transactionType: TransactionType.RECEIVE,
+        qtyIn: new Prisma.Decimal(10),
+        unitCostAtTime: new Prisma.Decimal(10),
+        extendedCost: new Prisma.Decimal(100),
+      }),
+    ]);
+
+    await service.postEvent(
+      {
+        ...baseDto,
+        transactionType: TransactionType.WASTAGE,
+        qtyIn: 0,
+        qtyOut: 1,
+      },
+      user,
+    );
+
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      tx.ledgerEvent.findMany.mock.invocationCallOrder[0],
     );
   });
 

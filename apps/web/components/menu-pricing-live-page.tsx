@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   ApiClient,
-  TOKEN_KEY,
+  getSessionAccessToken,
   type AuthenticatedUser,
   type MasterDataRecord,
   type MenuPrice,
@@ -83,7 +83,7 @@ export function MenuPricingLivePage({ screen }: MenuPricingLivePageProps) {
     let cancelled = false;
 
     async function load() {
-      const token = window.localStorage.getItem(TOKEN_KEY);
+      const token = getSessionAccessToken();
 
       if (!token) {
         setError("Sign in again to load menu pricing.");
@@ -174,7 +174,7 @@ export function MenuPricingLivePage({ screen }: MenuPricingLivePageProps) {
       return;
     }
 
-    const token = window.localStorage.getItem(TOKEN_KEY);
+    const token = getSessionAccessToken();
 
     if (!token) {
       setError("Sign in again before saving menu pricing.");
@@ -231,7 +231,7 @@ export function MenuPricingLivePage({ screen }: MenuPricingLivePageProps) {
   }
 
   async function action(id: string, type: "approve" | "clone" | "submit") {
-    const token = window.localStorage.getItem(TOKEN_KEY);
+    const token = getSessionAccessToken();
 
     if (!token) {
       setError("Sign in again before updating menu pricing.");

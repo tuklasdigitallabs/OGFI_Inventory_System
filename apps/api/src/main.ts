@@ -3,67 +3,69 @@ import { ConfigService } from "@nestjs/config";
 import { NestFactory } from "@nestjs/core";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import type { Request, Response } from "express";
+import Redis from "ioredis";
 import { AppModule } from "./app.module";
+import {
+  clientIp,
+  MemoryRateLimitStore,
+  rateLimitKey,
+  rateLimitRule,
+  RedisRateLimitStore,
+  type RateLimitStore,
+} from "./common/rate-limit";
 
-type RateLimitRule = {
-  key: string;
-  limit: number;
-  windowMs: number;
-};
+function rateLimitMiddleware(store: RateLimitStore) {
+  return async function rateLimit(
+    request: Request,
+    response: Response,
+    next: () => void,
+  ) {
+    const rule = rateLimitRule(request.path);
+    if (!rule) {
+      next();
+      return;
+    }
 
-const rateLimitBuckets = new Map<string, { count: number; resetAt: number }>();
+    let result;
+    try {
+      result = await store.hit(rateLimitKey(request, rule), rule);
+    } catch {
+      console.error(
+        JSON.stringify({
+          event: "rate_limit.store_error",
+          path: request.path,
+          rule: rule.key,
+        }),
+      );
+      response.status(503).json({
+        message: "Rate limit service is unavailable.",
+        statusCode: 503,
+      });
+      return;
+    }
 
-function rateLimitRule(path: string): RateLimitRule | null {
-  if (path === "/api/auth/login") {
-    return { key: "auth-login", limit: 10, windowMs: 60_000 };
-  }
-  if (path === "/api/auth/altcha-challenge") {
-    return { key: "auth-altcha", limit: 30, windowMs: 60_000 };
-  }
-  if (path.startsWith("/api/")) {
-    return { key: "api", limit: 3_000, windowMs: 60_000 };
-  }
-  return null;
-}
+    if (result.allowed) {
+      next();
+      return;
+    }
 
-function clientIp(request: Request) {
-  return request.ip || request.socket.remoteAddress || "unknown";
-}
-
-function rateLimitMiddleware(
-  request: Request,
-  response: Response,
-  next: () => void,
-) {
-  const rule = rateLimitRule(request.path);
-  if (!rule) {
-    next();
-    return;
-  }
-
-  const now = Date.now();
-  const bucketKey = `${rule.key}:${clientIp(request)}`;
-  const bucket = rateLimitBuckets.get(bucketKey);
-  if (!bucket || bucket.resetAt <= now) {
-    rateLimitBuckets.set(bucketKey, { count: 1, resetAt: now + rule.windowMs });
-    next();
-    return;
-  }
-
-  bucket.count += 1;
-  if (bucket.count > rule.limit) {
+    console.warn(
+      JSON.stringify({
+        event: "rate_limit.exceeded",
+        ip: clientIp(request),
+        path: request.path,
+        rule: rule.key,
+      }),
+    );
     response.setHeader(
       "Retry-After",
-      Math.ceil((bucket.resetAt - now) / 1000).toString(),
+      String(result.retryAfterSeconds ?? Math.ceil(rule.windowMs / 1000)),
     );
     response.status(429).json({
       message: "Too many requests. Please try again later.",
       statusCode: 429,
     });
-    return;
-  }
-
-  next();
+  };
 }
 
 async function bootstrap() {
@@ -71,16 +73,23 @@ async function bootstrap() {
   const config = app.get(ConfigService);
   const isProduction = config.get<string>("NODE_ENV") === "production";
   const expressApp = app.getHttpAdapter().getInstance();
+  const redisUrl =
+    config.get<string>("RATE_LIMIT_REDIS_URL") ??
+    config.get<string>("REDIS_URL");
+  const rateLimitStore = redisUrl
+    ? new RedisRateLimitStore(new Redis(redisUrl, { lazyConnect: false }))
+    : new MemoryRateLimitStore();
 
   expressApp.disable("x-powered-by");
   expressApp.set("trust proxy", 1);
   app.setGlobalPrefix("api");
   app.enableCors({
+    credentials: true,
     origin: isProduction
       ? (config.get<string>("CORS_ORIGIN") ?? "").split(",").filter(Boolean)
       : true,
   });
-  app.use(rateLimitMiddleware);
+  app.use(rateLimitMiddleware(rateLimitStore));
   app.use(
     (
       _: unknown,

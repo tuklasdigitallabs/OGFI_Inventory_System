@@ -18,7 +18,6 @@ import { LocationAccessGuard } from "./rbac/guards/location-access.guard";
 import { PermissionsGuard } from "./rbac/guards/permissions.guard";
 import { RbacModule } from "./rbac/rbac.module";
 import { ReportsModule } from "./reports/reports.module";
-import { SalesModule } from "./sales/sales.module";
 import { SyncModule } from "./sync/sync.module";
 import { TransfersModule } from "./transfers/transfers.module";
 
@@ -37,7 +36,6 @@ import { TransfersModule } from "./transfers/transfers.module";
     PurchasingModule,
     TransfersModule,
     BranchOpsModule,
-    SalesModule,
     ReportsModule,
     SyncModule,
     AuditModule,

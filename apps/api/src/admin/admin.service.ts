@@ -9,7 +9,7 @@ import { Prisma, RoleCode, User } from "@prisma/client";
 import * as bcrypt from "bcrypt";
 import { randomUUID } from "crypto";
 import { AuditService } from "../audit/audit.service";
-import { defaultTemporaryPassword } from "../auth/password-policy";
+import { generateTemporaryPassword } from "../auth/password-policy";
 import { AuthenticatedUser } from "../auth/types";
 import { PrismaService } from "../prisma/prisma.service";
 import {
@@ -80,6 +80,7 @@ export class AdminService {
   ) {
     const roleId = await this.resolveRoleId(dto.roleId);
     await this.validateLocations(dto.locationIds);
+    const temporaryPassword = generateTemporaryPassword();
 
     try {
       const created = await this.prisma.user.create({
@@ -87,7 +88,7 @@ export class AdminService {
           email: dto.email.trim().toLowerCase(),
           username: dto.username.trim(),
           fullName: dto.fullName.trim(),
-          passwordHash: await bcrypt.hash(defaultTemporaryPassword, 12),
+          passwordHash: await bcrypt.hash(temporaryPassword, 12),
           mustChangePassword: true,
           roleId,
           active: dto.active ?? true,
@@ -107,7 +108,10 @@ export class AdminService {
         userAgent: metadata.userAgent,
       });
 
-      return this.toUserResponse(created);
+      return {
+        ...this.toUserResponse(created),
+        temporaryPassword,
+      };
     } catch (error) {
       if (this.isUniqueConflict(error)) {
         throw new ConflictException("Email or username already exists.");
@@ -144,7 +148,7 @@ export class AdminService {
           });
         }
 
-        return tx.user.update({
+        const updated = await tx.user.update({
           where: { id },
           data: {
             email: dto.email?.trim().toLowerCase(),
@@ -159,6 +163,15 @@ export class AdminService {
           },
           include: this.userInclude(),
         });
+
+        if (roleId || dto.password || dto.active === false) {
+          await tx.userSession.updateMany({
+            where: { userId: id, revokedAt: null },
+            data: { revokedAt: new Date() },
+          });
+        }
+
+        return updated;
       });
 
       await this.auditService.record("admin", "users.update", {
@@ -191,10 +204,17 @@ export class AdminService {
     }
 
     const before = await this.findUser(id);
-    const updated = await this.prisma.user.update({
-      where: { id },
-      data: { active: false },
-      include: this.userInclude(),
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const deactivated = await tx.user.update({
+        where: { id },
+        data: { active: false },
+        include: this.userInclude(),
+      });
+      await tx.userSession.updateMany({
+        where: { userId: id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      return deactivated;
     });
 
     await this.auditService.record("admin", "users.deactivate", {
@@ -216,15 +236,23 @@ export class AdminService {
     metadata: RequestAuditMetadata = {},
   ) {
     const before = await this.findUser(id);
-    const updated = await this.prisma.user.update({
-      where: { id },
-      data: {
-        passwordHash: await bcrypt.hash(defaultTemporaryPassword, 12),
-        mustChangePassword: true,
-        failedLoginCount: 0,
-        lastFailedLoginAt: null,
-      },
-      include: this.userInclude(),
+    const temporaryPassword = generateTemporaryPassword();
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const reset = await tx.user.update({
+        where: { id },
+        data: {
+          passwordHash: await bcrypt.hash(temporaryPassword, 12),
+          mustChangePassword: true,
+          failedLoginCount: 0,
+          lastFailedLoginAt: null,
+        },
+        include: this.userInclude(),
+      });
+      await tx.userSession.updateMany({
+        where: { userId: id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      return reset;
     });
 
     await this.auditService.record("admin", "users.reset-password", {
@@ -237,7 +265,10 @@ export class AdminService {
       userAgent: metadata.userAgent,
     });
 
-    return this.toUserResponse(updated);
+    return {
+      ...this.toUserResponse(updated),
+      temporaryPassword,
+    };
   }
 
   async unrestrictUser(
@@ -517,6 +548,10 @@ export class AdminService {
             roleId: id,
             permissionId,
           })),
+        });
+        await tx.userSession.updateMany({
+          where: { user: { roleId: id }, revokedAt: null },
+          data: { revokedAt: new Date() },
         });
       }
 

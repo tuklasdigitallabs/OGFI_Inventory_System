@@ -19,6 +19,24 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: AccessTokenPayload): Promise<AuthenticatedUser> {
+    if (!payload.sid) {
+      throw new UnauthorizedException("Invalid session.");
+    }
+
+    const session = await this.prisma.userSession.findFirst({
+      where: {
+        id: payload.sid,
+        userId: payload.sub,
+        revokedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      select: { id: true },
+    });
+
+    if (!session) {
+      throw new UnauthorizedException("Session expired. Sign in again.");
+    }
+
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
       include: {
@@ -58,6 +76,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         ({ permission }) => `${permission.module}:${permission.action}`,
       ),
       locationIds: user.locationAccess.map(({ locationId }) => locationId),
+      sessionId: session.id,
     };
   }
 }

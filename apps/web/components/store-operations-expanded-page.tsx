@@ -11,7 +11,7 @@ import {
 } from "react";
 import {
   ApiClient,
-  TOKEN_KEY,
+  getSessionAccessToken,
   type AuthenticatedUser,
   type BranchOperationRecord,
   type MasterDataRecord,
@@ -158,7 +158,7 @@ export function StoreOperationsExpandedPage({
     let cancelled = false;
 
     async function loadBaseData() {
-      const token = window.localStorage.getItem(TOKEN_KEY);
+      const token = getSessionAccessToken();
 
       if (!token) {
         setError("Sign in again to load store operations.");
@@ -1781,7 +1781,7 @@ function StateRow({ colSpan, label }: { colSpan: number; label: string }) {
 }
 
 async function clientFromSession() {
-  const token = window.localStorage.getItem(TOKEN_KEY);
+  const token = getSessionAccessToken();
 
   if (!token) {
     throw new Error("Sign in again to continue.");

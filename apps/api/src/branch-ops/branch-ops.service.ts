@@ -17,6 +17,7 @@ import {
 } from "@prisma/client";
 import { randomUUID } from "crypto";
 import { AuthenticatedUser } from "../auth/types";
+import { nextBusinessDocumentNumber } from "../common/document-numbering";
 import { CostingService } from "../costing/costing.service";
 import { LedgerService } from "../ledger/ledger.service";
 import { PrismaService } from "../prisma/prisma.service";
@@ -66,20 +67,24 @@ export class BranchOpsService {
     private readonly costingService: CostingService,
   ) {}
 
-  list(resource: string, query?: Record<string, string>) {
+  list(
+    resource: string,
+    query?: Record<string, string>,
+    user?: AuthenticatedUser,
+  ) {
     switch (resource) {
       case "wastage":
-        return this.listWastage(query);
+        return this.listWastage(query, user);
       case "stock-counts":
-        return this.listStockCounts(query);
+        return this.listStockCounts(query, user);
       case "stock-counts.detail":
-        return this.getStockCount(query?.id);
+        return this.getStockCount(query?.id, user);
       case "issues":
-        return this.listIssues(query);
+        return this.listIssues(query, user);
       case "emergency-purchases":
-        return this.listEmergencyPurchases(query);
+        return this.listEmergencyPurchases(query, user);
       case "sales-batches":
-        return this.listSalesBatches(query);
+        return this.listSalesBatches(query, user);
       default:
         throw new NotFoundException("Branch operations resource not found.");
     }
@@ -150,28 +155,29 @@ export class BranchOpsService {
         metadata,
       );
 
+      for (const line of lines) {
+        await this.ledgerService.postEventInTransaction(
+          tx,
+          {
+            uuid: randomUUID(),
+            locationId: dto.locationId,
+            itemId: line.itemId,
+            transactionType: TransactionType.WASTAGE,
+            qtyOut: line.qty,
+            unitCostAtTime: Number(lineCosts.get(line.itemId) ?? 0),
+            referenceType: ReferenceType.WASTAGE,
+            referenceId: created.id,
+            businessDate: dto.businessDate,
+            reasonCodeId: dto.reasonCodeId,
+            metadata: { wastageNumber: created.wastageNumber },
+          },
+          user,
+          metadata,
+        );
+      }
+
       return created;
     });
-
-    for (const line of lines) {
-      await this.ledgerService.postEvent(
-        {
-          uuid: randomUUID(),
-          locationId: dto.locationId,
-          itemId: line.itemId,
-          transactionType: TransactionType.WASTAGE,
-          qtyOut: line.qty,
-          unitCostAtTime: Number(lineCosts.get(line.itemId) ?? 0),
-          referenceType: ReferenceType.WASTAGE,
-          referenceId: wastage.id,
-          businessDate: dto.businessDate,
-          reasonCodeId: dto.reasonCodeId,
-          metadata: { wastageNumber: wastage.wastageNumber },
-        },
-        user,
-        metadata,
-      );
-    }
 
     return this.toResponse(wastage);
   }
@@ -196,6 +202,12 @@ export class BranchOpsService {
         tx,
         dto.locationId,
         lines.map((line) => line.itemId),
+      );
+      await this.assertStockCountNotDuplicate(
+        tx,
+        dto.locationId,
+        dto.countType,
+        dto.businessDate,
       );
 
       const created = await tx.stockCount.create({
@@ -234,34 +246,35 @@ export class BranchOpsService {
         metadata,
       );
 
-      return created;
-    });
+      for (const line of created.lines) {
+        const varianceQty = new Prisma.Decimal(line.varianceQty ?? 0);
 
-    for (const line of stockCount.lines) {
-      const varianceQty = new Prisma.Decimal(line.varianceQty ?? 0);
+        if (varianceQty.eq(0)) {
+          continue;
+        }
 
-      if (varianceQty.eq(0)) {
-        continue;
+        await this.ledgerService.postEventInTransaction(
+          tx,
+          {
+            uuid: randomUUID(),
+            locationId: dto.locationId,
+            itemId: line.itemId,
+            transactionType: TransactionType.STOCK_COUNT,
+            qtyIn: varianceQty.gt(0) ? varianceQty.toNumber() : undefined,
+            qtyOut: varianceQty.lt(0) ? varianceQty.abs().toNumber() : undefined,
+            unitCostAtTime: 0,
+            referenceType: ReferenceType.COUNT,
+            referenceId: created.id,
+            businessDate: dto.businessDate,
+            metadata: { countNumber: created.countNumber },
+          },
+          user,
+          metadata,
+        );
       }
 
-      await this.ledgerService.postEvent(
-        {
-          uuid: randomUUID(),
-          locationId: dto.locationId,
-          itemId: line.itemId,
-          transactionType: TransactionType.STOCK_COUNT,
-          qtyIn: varianceQty.gt(0) ? varianceQty.toNumber() : undefined,
-          qtyOut: varianceQty.lt(0) ? varianceQty.abs().toNumber() : undefined,
-          unitCostAtTime: 0,
-          referenceType: ReferenceType.COUNT,
-          referenceId: stockCount.id,
-          businessDate: dto.businessDate,
-          metadata: { countNumber: stockCount.countNumber },
-        },
-        user,
-        metadata,
-      );
-    }
+      return created;
+    });
 
     return this.toResponse(stockCount);
   }
@@ -314,27 +327,28 @@ export class BranchOpsService {
         metadata,
       );
 
+      for (const line of lines) {
+        await this.ledgerService.postEventInTransaction(
+          tx,
+          {
+            uuid: randomUUID(),
+            locationId: dto.locationId,
+            itemId: line.itemId,
+            transactionType: TransactionType.ISSUE_TO_OPS,
+            qtyOut: line.qty,
+            unitCostAtTime: Number(lineCosts.get(line.itemId) ?? 0),
+            referenceType: ReferenceType.ISSUE,
+            referenceId: created.id,
+            businessDate: dto.businessDate,
+            metadata: { issueNumber: created.issueNumber },
+          },
+          user,
+          metadata,
+        );
+      }
+
       return created;
     });
-
-    for (const line of lines) {
-      await this.ledgerService.postEvent(
-        {
-          uuid: randomUUID(),
-          locationId: dto.locationId,
-          itemId: line.itemId,
-          transactionType: TransactionType.ISSUE_TO_OPS,
-          qtyOut: line.qty,
-          unitCostAtTime: Number(lineCosts.get(line.itemId) ?? 0),
-          referenceType: ReferenceType.ISSUE,
-          referenceId: issue.id,
-          businessDate: dto.businessDate,
-          metadata: { issueNumber: issue.issueNumber },
-        },
-        user,
-        metadata,
-      );
-    }
 
     return this.toResponse(issue);
   }
@@ -391,32 +405,33 @@ export class BranchOpsService {
         metadata,
       );
 
+      for (const line of lines) {
+        await this.ledgerService.postEventInTransaction(
+          tx,
+          {
+            uuid: randomUUID(),
+            locationId: dto.locationId,
+            itemId: line.itemId,
+            transactionType: TransactionType.RECEIVE,
+            qtyIn: line.qty,
+            unitCostAtTime: line.unitCost,
+            referenceType: ReferenceType.EMERGENCY_PURCHASE,
+            referenceId: created.id,
+            businessDate: dto.businessDate,
+            metadata: {
+              purchaseNumber: created.purchaseNumber,
+              sourceName: created.sourceName,
+              receiptReference: created.receiptReference,
+              brand: line.brand,
+            },
+          },
+          user,
+          metadata,
+        );
+      }
+
       return created;
     });
-
-    for (const line of lines) {
-      await this.ledgerService.postEvent(
-        {
-          uuid: randomUUID(),
-          locationId: dto.locationId,
-          itemId: line.itemId,
-          transactionType: TransactionType.RECEIVE,
-          qtyIn: line.qty,
-          unitCostAtTime: line.unitCost,
-          referenceType: ReferenceType.EMERGENCY_PURCHASE,
-          referenceId: emergencyPurchase.id,
-          businessDate: dto.businessDate,
-          metadata: {
-            purchaseNumber: emergencyPurchase.purchaseNumber,
-            sourceName: emergencyPurchase.sourceName,
-            receiptReference: emergencyPurchase.receiptReference,
-            brand: line.brand,
-          },
-        },
-        user,
-        metadata,
-      );
-    }
 
     return this.toResponse(emergencyPurchase);
   }
@@ -470,34 +485,38 @@ export class BranchOpsService {
         metadata,
       );
 
+      for (const line of consumptionLines) {
+        await this.ledgerService.postEventInTransaction(
+          tx,
+          {
+            uuid: randomUUID(),
+            locationId: dto.locationId,
+            itemId: line.itemId,
+            transactionType: TransactionType.SALE_CONSUMPTION,
+            qtyOut: line.qty,
+            unitCostAtTime: Number(lineCosts.get(line.itemId) ?? 0),
+            referenceType: ReferenceType.SALES_BATCH,
+            referenceId: created.id,
+            businessDate: dto.businessDate,
+            metadata: { batchNumber: created.batchNumber },
+          },
+          user,
+          metadata,
+        );
+      }
+
       return created;
     });
-
-    for (const line of consumptionLines) {
-      await this.ledgerService.postEvent(
-        {
-          uuid: randomUUID(),
-          locationId: dto.locationId,
-          itemId: line.itemId,
-          transactionType: TransactionType.SALE_CONSUMPTION,
-          qtyOut: line.qty,
-          unitCostAtTime: Number(lineCosts.get(line.itemId) ?? 0),
-          referenceType: ReferenceType.SALES_BATCH,
-          referenceId: salesBatch.id,
-          businessDate: dto.businessDate,
-          metadata: { batchNumber: salesBatch.batchNumber },
-        },
-        user,
-        metadata,
-      );
-    }
 
     return this.toResponse(salesBatch);
   }
 
-  private async listWastage(query?: Record<string, string>) {
+  private async listWastage(
+    query?: Record<string, string>,
+    user?: AuthenticatedUser,
+  ) {
     const data = await this.prisma.wastage.findMany({
-      where: this.locationWhere(query),
+      where: this.locationWhere(query, user),
       include: wastageInclude,
       orderBy: { createdAt: "desc" },
       take: this.parseTake(query?.take),
@@ -506,9 +525,12 @@ export class BranchOpsService {
     return { resource: "branch.wastage", data: this.toResponse(data) };
   }
 
-  private async listStockCounts(query?: Record<string, string>) {
+  private async listStockCounts(
+    query?: Record<string, string>,
+    user?: AuthenticatedUser,
+  ) {
     const data = await this.prisma.stockCount.findMany({
-      where: this.locationWhere(query),
+      where: this.locationWhere(query, user),
       include: stockCountInclude,
       orderBy: { createdAt: "desc" },
       take: this.parseTake(query?.take),
@@ -517,7 +539,7 @@ export class BranchOpsService {
     return { resource: "branch.stock-counts", data: this.toResponse(data) };
   }
 
-  private async getStockCount(id?: string) {
+  private async getStockCount(id?: string, user?: AuthenticatedUser) {
     if (!id) {
       throw new BadRequestException("Stock count id is required.");
     }
@@ -531,12 +553,19 @@ export class BranchOpsService {
       throw new NotFoundException("Stock count not found.");
     }
 
+    if (user) {
+      this.assertUserCanAccessLocation(user, stockCount.locationId);
+    }
+
     return this.toResponse(stockCount);
   }
 
-  private async listIssues(query?: Record<string, string>) {
+  private async listIssues(
+    query?: Record<string, string>,
+    user?: AuthenticatedUser,
+  ) {
     const data = await this.prisma.issueToOps.findMany({
-      where: this.locationWhere(query),
+      where: this.locationWhere(query, user),
       include: issueInclude,
       orderBy: { createdAt: "desc" },
       take: this.parseTake(query?.take),
@@ -545,9 +574,12 @@ export class BranchOpsService {
     return { resource: "branch.issues", data: this.toResponse(data) };
   }
 
-  private async listEmergencyPurchases(query?: Record<string, string>) {
+  private async listEmergencyPurchases(
+    query?: Record<string, string>,
+    user?: AuthenticatedUser,
+  ) {
     const data = await this.prisma.emergencyPurchase.findMany({
-      where: this.locationWhere(query),
+      where: this.locationWhere(query, user),
       include: emergencyPurchaseInclude,
       orderBy: { createdAt: "desc" },
       take: this.parseTake(query?.take),
@@ -559,9 +591,12 @@ export class BranchOpsService {
     };
   }
 
-  private async listSalesBatches(query?: Record<string, string>) {
+  private async listSalesBatches(
+    query?: Record<string, string>,
+    user?: AuthenticatedUser,
+  ) {
     const data = await this.prisma.salesBatch.findMany({
-      where: this.locationWhere(query),
+      where: this.locationWhere(query, user),
       include: salesBatchInclude,
       orderBy: { createdAt: "desc" },
       take: this.parseTake(query?.take),
@@ -632,6 +667,53 @@ export class BranchOpsService {
         "Store Operations only supports Beginning and EOD counts.",
       );
     }
+  }
+
+  private async assertStockCountNotDuplicate(
+    tx: Prisma.TransactionClient,
+    locationId: string,
+    countType: StockCountType,
+    businessDate: string,
+  ) {
+    const where: Prisma.StockCountWhereInput = {
+      countType,
+      locationId,
+      status: CountStatus.POSTED,
+    };
+
+    if (countType === StockCountType.EOD) {
+      const { start, end } = this.businessDateRange(businessDate);
+      where.businessDate = { gte: start, lt: end };
+    }
+
+    const existingCount = await tx.stockCount.findFirst({
+      where,
+      select: { countNumber: true },
+    });
+
+    if (!existingCount) {
+      return;
+    }
+
+    if (countType === StockCountType.OPENING) {
+      throw new ConflictException(
+        `Opening inventory was already posted for this location as ${existingCount.countNumber}. Reset the location before uploading another opening count.`,
+      );
+    }
+
+    throw new ConflictException(
+      `EOD count was already posted for this location and business date as ${existingCount.countNumber}.`,
+    );
+  }
+
+  private businessDateRange(value: string) {
+    const start = new Date(value);
+    start.setHours(0, 0, 0, 0);
+
+    const end = new Date(start);
+    end.setDate(end.getDate() + 1);
+
+    return { end, start };
   }
 
   private async currentQtyByItem(locationId: string, itemIds: string[]) {
@@ -935,40 +1017,31 @@ export class BranchOpsService {
     }
   }
 
-  private locationWhere(query?: Record<string, string>) {
-    return query?.locationId ? { locationId: query.locationId } : {};
+  private locationWhere(
+    query?: Record<string, string>,
+    user?: AuthenticatedUser,
+  ) {
+    if (query?.locationId) {
+      if (user) {
+        this.assertUserCanAccessLocation(user, query.locationId);
+      }
+      return { locationId: query.locationId };
+    }
+
+    return user ? { locationId: { in: user.locationIds } } : {};
   }
 
   private async nextDocumentNumber(
     tx: Prisma.TransactionClient,
     prefix: string,
-    model:
+    _model:
       | "wastage"
       | "stockCount"
       | "issueToOps"
       | "emergencyPurchase"
       | "salesBatch",
   ) {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-
-    const end = new Date(start);
-    end.setDate(end.getDate() + 1);
-
-    const where = { createdAt: { gte: start, lt: end } };
-    const count =
-      model === "wastage"
-        ? await tx.wastage.count({ where })
-        : model === "stockCount"
-          ? await tx.stockCount.count({ where })
-          : model === "issueToOps"
-            ? await tx.issueToOps.count({ where })
-            : model === "emergencyPurchase"
-              ? await tx.emergencyPurchase.count({ where })
-              : await tx.salesBatch.count({ where });
-    const datePart = start.toISOString().slice(0, 10).replace(/-/g, "");
-
-    return `${prefix}-${datePart}-${String(count + 1).padStart(4, "0")}`;
+    return nextBusinessDocumentNumber(tx, prefix);
   }
 
   private async recordAudit(

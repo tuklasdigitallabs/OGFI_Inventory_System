@@ -13,7 +13,9 @@ import { Icon } from "@/lib/icons";
 import {
   ApiClient,
   API_URL,
-  TOKEN_KEY,
+  clearSessionAccessToken,
+  getSessionAccessToken,
+  setSessionAccessToken,
   type AuthenticatedUser,
   type OfflinePinStatus,
 } from "@/lib/api-client";
@@ -46,7 +48,7 @@ type AuthGateChildProps = {
 
 export function AuthGate({ children }: AuthGateProps) {
   const [captchaKey, setCaptchaKey] = useState(0);
-  const [identifier, setIdentifier] = useState("admin");
+  const [identifier, setIdentifier] = useState("");
   const [offlinePin, setOfflinePin] = useState("");
   const [offlinePinMode, setOfflinePinMode] = useState<
     "setup" | "unlock" | null
@@ -65,10 +67,10 @@ export function AuthGate({ children }: AuthGateProps) {
   useEffect(() => {
     void import("altcha");
 
-    const storedToken = window.localStorage.getItem(TOKEN_KEY);
+    const storedToken = getSessionAccessToken();
 
     if (!storedToken) {
-      setLoading(false);
+      void refreshSession().finally(() => setLoading(false));
       return;
     }
 
@@ -137,12 +139,39 @@ export function AuthGate({ children }: AuthGateProps) {
       setOfflinePinStatus(pinStatus);
       setOfflinePinMode(navigator.onLine ? null : offlinePinModeFor(pinStatus));
     } catch {
-      window.localStorage.removeItem(TOKEN_KEY);
-      setToken(null);
-      setUser(null);
+      if (!navigator.onLine || !(await refreshSession())) {
+        clearSessionAccessToken();
+        setToken(null);
+        setUser(null);
+      }
     } finally {
       setLoading(false);
     }
+  }
+
+  async function refreshSession() {
+    const response = await fetch(`${API_URL}/auth/refresh`, {
+      cache: "no-store",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    });
+
+    if (!response.ok) {
+      return false;
+    }
+
+    const result = (await response.json()) as LoginResponse;
+    const pinStatus = await new ApiClient(result.accessToken)
+      .offlinePinStatus()
+      .catch(() => null);
+    setSessionAccessToken(result.accessToken);
+    setToken(result.accessToken);
+    setUser(result.user);
+    setOfflinePinStatus(pinStatus);
+    setOfflinePinMode(navigator.onLine ? null : offlinePinModeFor(pinStatus));
+
+    return true;
   }
 
   async function login(event: FormEvent<HTMLFormElement>) {
@@ -160,11 +189,12 @@ export function AuthGate({ children }: AuthGateProps) {
       }
 
       const response = await fetch(`${API_URL}/auth/login`, {
-        method: "POST",
+        body: JSON.stringify({ altcha, identifier, password }),
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ altcha, identifier, password }),
+        method: "POST",
       });
 
       if (!response.ok) {
@@ -175,7 +205,7 @@ export function AuthGate({ children }: AuthGateProps) {
       const pinStatus = await new ApiClient(result.accessToken)
         .offlinePinStatus()
         .catch(() => null);
-      window.localStorage.setItem(TOKEN_KEY, result.accessToken);
+      setSessionAccessToken(result.accessToken);
       setToken(result.accessToken);
       setUser(result.user);
       setCurrentPassword(result.user.mustChangePassword ? password : "");
@@ -195,9 +225,15 @@ export function AuthGate({ children }: AuthGateProps) {
   }
 
   async function logout() {
+    const currentToken = token;
+
+    if (currentToken) {
+      await new ApiClient(currentToken).logout().catch(() => null);
+    }
+
     lockOfflineSession();
     await clearOfflineData();
-    window.localStorage.removeItem(TOKEN_KEY);
+    clearSessionAccessToken();
     setToken(null);
     setUser(null);
     setOfflinePin("");

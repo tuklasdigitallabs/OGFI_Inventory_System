@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   ApiClient,
-  TOKEN_KEY,
+  getSessionAccessToken,
   type AdminPermission,
   type AdminRole,
   type AdminUser,
@@ -34,6 +34,12 @@ type AdminState = {
 };
 
 type AdminTab = "users" | "roles" | "devices" | "audit" | "offline-pin";
+
+type TemporaryPasswordNotice = {
+  fullName: string;
+  password: string;
+  username: string;
+};
 
 type UserForm = {
   active: boolean;
@@ -97,6 +103,8 @@ export function AdminLivePage({ screen }: AdminLivePageProps) {
   const [saving, setSaving] = useState(false);
   const [offlinePin, setOfflinePin] = useState("");
   const [offlinePinConfirm, setOfflinePinConfirm] = useState("");
+  const [temporaryPassword, setTemporaryPassword] =
+    useState<TemporaryPasswordNotice | null>(null);
   const [state, setState] = useState<AdminState>({
     auditLogs: [],
     error: null,
@@ -115,7 +123,7 @@ export function AdminLivePage({ screen }: AdminLivePageProps) {
     let cancelled = false;
 
     async function load() {
-      const token = window.localStorage.getItem(TOKEN_KEY);
+      const token = getSessionAccessToken();
 
       if (!token) {
         setState((current) => ({
@@ -245,8 +253,14 @@ export function AdminLivePage({ screen }: AdminLivePageProps) {
 
       if (userForm.id) {
         await client.updateAdminUser(userForm.id, payload);
+        setTemporaryPassword(null);
       } else {
-        await client.createAdminUser(payload);
+        const created = await client.createAdminUser(payload);
+        setTemporaryPassword({
+          fullName: created.fullName,
+          password: created.temporaryPassword,
+          username: created.username,
+        });
       }
 
       await refresh(client);
@@ -269,6 +283,7 @@ export function AdminLivePage({ screen }: AdminLivePageProps) {
       const client = await clientFromSession();
       await client.deactivateAdminUser(id);
       await refresh(client);
+      setTemporaryPassword(null);
       setState((current) => ({ ...current, error: null }));
     } catch (error) {
       setState((current) => ({
@@ -405,11 +420,29 @@ export function AdminLivePage({ screen }: AdminLivePageProps) {
   }
 
   async function resetUserPassword(id: string) {
-    await runUserAction(
-      id,
-      (client, userId) => client.resetAdminUserPassword(userId),
-      "Unable to reset user password.",
-    );
+    setSaving(true);
+
+    try {
+      const client = await clientFromSession();
+      const reset = await client.resetAdminUserPassword(id);
+      await refresh(client);
+      setTemporaryPassword({
+        fullName: reset.fullName,
+        password: reset.temporaryPassword,
+        username: reset.username,
+      });
+      setState((current) => ({ ...current, error: null }));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unable to reset user password.",
+      }));
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function unrestrictUser(id: string) {
@@ -492,6 +525,21 @@ export function AdminLivePage({ screen }: AdminLivePageProps) {
       {state.error ? (
         <div className="rounded-md border border-red-100 bg-red-50 px-4 py-3 text-sm font-semibold text-og-error">
           {state.error}
+        </div>
+      ) : null}
+
+      {temporaryPassword ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-og-dark">
+          <p className="font-semibold">
+            Temporary password for {temporaryPassword.fullName}
+          </p>
+          <p className="mt-1 text-xs text-og-gray">
+            Give this one-time password to @{temporaryPassword.username}. It is
+            only shown here and the user must change it after signing in.
+          </p>
+          <code className="mt-2 block rounded border border-amber-200 bg-white px-3 py-2 font-mono text-sm font-semibold text-og-dark">
+            {temporaryPassword.password}
+          </code>
         </div>
       ) : null}
 
@@ -656,7 +704,8 @@ function UserEditor({
         onChange={(username) => setForm({ ...form, username })}
       />
       <p className="rounded-md border border-og-line bg-gray-50 px-3 py-2 text-xs font-semibold text-og-gray">
-        New and reset accounts use the temporary password onegourmetfoodsinc.
+        New and reset accounts generate a one-time temporary password after
+        saving.
       </p>
 
       <label className="flex flex-col gap-1 text-xs font-semibold text-og-gray">
@@ -1793,7 +1842,7 @@ function TextField({
 }
 
 async function clientFromSession() {
-  const token = window.localStorage.getItem(TOKEN_KEY);
+  const token = getSessionAccessToken();
 
   if (!token) {
     throw new Error("Sign in again to continue.");

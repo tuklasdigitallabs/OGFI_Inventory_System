@@ -9,6 +9,7 @@ import {
 import * as ExcelJS from "exceljs";
 import { randomUUID } from "crypto";
 import { AuthenticatedUser } from "../auth/types";
+import { nextBusinessDocumentNumber } from "../common/document-numbering";
 import { PrismaService } from "../prisma/prisma.service";
 
 type RequestAuditMetadata = {
@@ -42,6 +43,8 @@ type ValidOpeningRow = ParsedOpeningRow & {
   unitCostAtTime: Prisma.Decimal;
 };
 
+const maxOpeningInventoryRows = 2000;
+
 @Injectable()
 export class OpeningInventoryImportService {
   constructor(private readonly prisma: PrismaService) {}
@@ -71,18 +74,34 @@ export class OpeningInventoryImportService {
     }
 
     const parsedRows = this.readRows(workbook);
+    this.assertRowLimit(parsedRows);
+
     const errors: OpeningInventoryError[] = [];
 
-    const [location, existingLedgerCount] = await Promise.all([
+    const [location, existingLedgerCount, existingOpeningCount] = await Promise.all([
       this.prisma.location.findFirst({
         where: { id: dto.locationId, active: true },
         select: { code: true, id: true, name: true },
       }),
       this.prisma.ledgerEvent.count({ where: { locationId: dto.locationId } }),
+      this.prisma.stockCount.findFirst({
+        where: {
+          countType: StockCountType.OPENING,
+          locationId: dto.locationId,
+          status: CountStatus.POSTED,
+        },
+        select: { countNumber: true },
+      }),
     ]);
 
     if (!location) {
       throw new BadRequestException("Location does not exist or is inactive.");
+    }
+
+    if (existingOpeningCount) {
+      throw new BadRequestException(
+        `Opening inventory was already posted for this location as ${existingOpeningCount.countNumber}. Reset the location before uploading another opening count.`,
+      );
     }
 
     if (existingLedgerCount > 0) {
@@ -110,6 +129,8 @@ export class OpeningInventoryImportService {
     }
 
     const stockCount = await this.prisma.$transaction(async (tx) => {
+      await this.assertOpeningInventoryNotDuplicate(tx, dto.locationId);
+
       const created = await tx.stockCount.create({
         data: {
           businessDate: new Date(dto.businessDate),
@@ -261,6 +282,14 @@ export class OpeningInventoryImportService {
     return rows;
   }
 
+  private assertRowLimit(rows: ParsedOpeningRow[]) {
+    if (rows.length > maxOpeningInventoryRows) {
+      throw new BadRequestException(
+        `Opening inventory import supports up to ${maxOpeningInventoryRows.toLocaleString()} item rows per workbook.`,
+      );
+    }
+  }
+
   private readFlatErrorRows(worksheet: ExcelJS.Worksheet) {
     const headers: string[] = [];
     worksheet.getRow(1).eachCell((cell) => headers.push(this.cellText(cell)));
@@ -347,7 +376,7 @@ export class OpeningInventoryImportService {
 
       const count = this.parseQuantity(row.count || "0", "COUNT", rowErrors);
       const loose = this.parseQuantity(row.loose || "0", "LOOSE", rowErrors);
-      const unitCost = this.resolveUnitCost(row.unitCost, item);
+      const unitCost = this.resolveUnitCost(row.unitCost, item, rowErrors);
       const quantityResult =
         item && count !== null && loose !== null
           ? this.resolveBaseQuantity(
@@ -369,7 +398,7 @@ export class OpeningInventoryImportService {
         rowErrors.push("Duplicate item row for this opening inventory upload.");
       }
 
-      if (rowErrors.length > 0 || !item || !quantityResult) {
+      if (rowErrors.length > 0 || !item || !quantityResult || !unitCost) {
         errors.push({
           errors: rowErrors,
           row: row.row,
@@ -527,14 +556,19 @@ export class OpeningInventoryImportService {
           supplierItems: Array<{ unitCost: Prisma.Decimal | null }>;
         }
       | undefined,
+    errors: string[],
   ) {
     const value = rawValue.replace(/,/g, "").trim();
 
     if (value) {
       const numeric = Number(value);
-      return Number.isFinite(numeric) && numeric >= 0
-        ? new Prisma.Decimal(value)
-        : new Prisma.Decimal(0);
+
+      if (!Number.isFinite(numeric) || numeric < 0) {
+        errors.push("UNIT COST must be a valid non-negative number.");
+        return null;
+      }
+
+      return new Prisma.Decimal(value);
     }
 
     const supplierCost = item?.supplierItems.find((supplierItem) =>
@@ -605,18 +639,27 @@ export class OpeningInventoryImportService {
   }
 
   private async nextStockCountNumber(tx: Prisma.TransactionClient) {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
+    return nextBusinessDocumentNumber(tx, "OPN");
+  }
 
-    const end = new Date(start);
-    end.setDate(end.getDate() + 1);
-
-    const count = await tx.stockCount.count({
-      where: { createdAt: { gte: start, lt: end } },
+  private async assertOpeningInventoryNotDuplicate(
+    tx: Prisma.TransactionClient,
+    locationId: string,
+  ) {
+    const existingOpeningCount = await tx.stockCount.findFirst({
+      where: {
+        countType: StockCountType.OPENING,
+        locationId,
+        status: CountStatus.POSTED,
+      },
+      select: { countNumber: true },
     });
-    const datePart = start.toISOString().slice(0, 10).replace(/-/g, "");
 
-    return `OPN-${datePart}-${String(count + 1).padStart(4, "0")}`;
+    if (existingOpeningCount) {
+      throw new BadRequestException(
+        `Opening inventory was already posted for this location as ${existingOpeningCount.countNumber}. Reset the location before uploading another opening count.`,
+      );
+    }
   }
 
   private cellText(cell: ExcelJS.Cell) {

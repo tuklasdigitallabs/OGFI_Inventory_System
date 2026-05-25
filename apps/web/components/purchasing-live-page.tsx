@@ -12,7 +12,7 @@ import { Icon } from "@/lib/icons";
 import type { Kpi, Screen } from "@/lib/screens";
 import {
   ApiClient,
-  TOKEN_KEY,
+  getSessionAccessToken,
   type AuthenticatedUser,
   type MasterDataRecord,
   type PurchaseOrder,
@@ -200,7 +200,7 @@ export function PurchasingLivePage({ screen }: PurchasingLivePageProps) {
     let cancelled = false;
 
     async function loadPurchasing() {
-      const token = window.localStorage.getItem(TOKEN_KEY);
+      const token = getSessionAccessToken();
 
       if (!token) {
         setTableError("Sign in again to load purchasing data.");
@@ -404,7 +404,7 @@ export function PurchasingLivePage({ screen }: PurchasingLivePageProps) {
   }
 
   async function clientFromSession() {
-    const token = window.localStorage.getItem(TOKEN_KEY);
+    const token = getSessionAccessToken();
 
     if (!token) {
       throw new Error("Sign in again to continue.");
@@ -1198,6 +1198,7 @@ function ReceivingForm({
                 "Received",
                 "Rejected",
                 "Remaining",
+                "UOM",
                 "Accept Now",
                 "Reject Now",
                 "Remarks",
@@ -1214,7 +1215,7 @@ function ReceivingForm({
           <tbody>
             {lines.length === 0 ? (
               <tr>
-                <td className="px-3 py-8 text-center text-og-gray" colSpan={8}>
+                <td className="px-3 py-8 text-center text-og-gray" colSpan={9}>
                   No PO line items selected.
                 </td>
               </tr>
@@ -1241,6 +1242,9 @@ function ReceivingForm({
                     </td>
                     <td className="px-3 py-2 font-semibold text-og-dark">
                       {decimal(line.remainingQty ?? line.qty)}
+                    </td>
+                    <td className="px-3 py-2 text-og-dark">
+                      {text(line.uom?.code)}
                     </td>
                     <td className="px-3 py-2">
                       <input

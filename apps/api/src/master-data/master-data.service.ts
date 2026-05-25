@@ -629,9 +629,15 @@ export class MasterDataService {
     user: AuthenticatedUser,
     metadata: RequestAuditMetadata = {},
   ) {
-    return this.withUpdateAudit("items", id, user, metadata, async (tx) => {
+    return this.withUpdateAudit("items", id, user, metadata, async (tx, before) => {
       if (dto.baseUomId) {
         await this.assertActive(tx, "uom", dto.baseUomId, "Base UOM");
+        await this.assertItemBaseUomCanChange(
+          tx,
+          id,
+          String(before.baseUomId),
+          dto.baseUomId,
+        );
       }
       await this.validateLooseItemSetup(tx, dto, id);
 
@@ -670,6 +676,64 @@ export class MasterDataService {
         include: itemInclude,
       });
     });
+  }
+
+  private async assertItemBaseUomCanChange(
+    tx: Tx,
+    itemId: string,
+    currentBaseUomId: string,
+    nextBaseUomId: string,
+  ) {
+    if (currentBaseUomId === nextBaseUomId) {
+      return;
+    }
+
+    const itemUsage = await tx.item.findUnique({
+      where: { id: itemId },
+      select: {
+        _count: {
+          select: {
+            adjustmentRequests: true,
+            emergencyPurchaseLines: true,
+            issueLines: true,
+            ledgerEvents: true,
+            purchaseOrderLines: true,
+            receivingLines: true,
+            recipeIngredients: true,
+            recipeOutputs: true,
+            salesBatchLines: true,
+            stockCountLines: true,
+            supplierItems: true,
+            transferLines: true,
+            wastageLines: true,
+          },
+        },
+      },
+    });
+
+    const usageLabels = [
+      ["adjustment requests", itemUsage?._count.adjustmentRequests],
+      ["emergency purchase lines", itemUsage?._count.emergencyPurchaseLines],
+      ["issue lines", itemUsage?._count.issueLines],
+      ["ledger events", itemUsage?._count.ledgerEvents],
+      ["purchase order lines", itemUsage?._count.purchaseOrderLines],
+      ["receiving lines", itemUsage?._count.receivingLines],
+      ["recipe ingredients", itemUsage?._count.recipeIngredients],
+      ["recipe outputs", itemUsage?._count.recipeOutputs],
+      ["sales batch lines", itemUsage?._count.salesBatchLines],
+      ["stock count lines", itemUsage?._count.stockCountLines],
+      ["supplier items", itemUsage?._count.supplierItems],
+      ["transfer lines", itemUsage?._count.transferLines],
+      ["wastage lines", itemUsage?._count.wastageLines],
+    ]
+      .filter(([, count]) => Number(count ?? 0) > 0)
+      .map(([label]) => label);
+
+    if (usageLabels.length > 0) {
+      throw new BadRequestException(
+        `Base UOM cannot be changed because this item is already used in ${usageLabels.join(", ")}.`,
+      );
+    }
   }
 
   async createRecipe(

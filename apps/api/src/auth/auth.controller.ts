@@ -1,8 +1,13 @@
-import { Body, Controller, Get, Post, Req } from "@nestjs/common";
-import { Request } from "express";
+import { Body, Controller, Get, Post, Req, Res } from "@nestjs/common";
+import { Request, Response } from "express";
 import { CurrentUser } from "./decorators/current-user.decorator";
 import { Public } from "./decorators/public.decorator";
-import { ChangePasswordDto, LoginDto, OfflinePinDto } from "./dto/login.dto";
+import {
+  ChangePasswordDto,
+  LoginDto,
+  OfflinePinDto,
+  RefreshTokenDto,
+} from "./dto/login.dto";
 import { AuthService } from "./auth.service";
 import { AuthenticatedUser } from "./types";
 
@@ -18,24 +23,48 @@ export class AuthController {
 
   @Public()
   @Post("login")
-  login(@Body() body: LoginDto, @Req() request: Request) {
-    return this.authService.login(body, {
+  async login(
+    @Body() body: LoginDto,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const session = await this.authService.login(body, {
       ipAddress: request.ip,
       userAgent: request.headers["user-agent"],
     });
+    this.setRefreshCookie(response, session.refreshToken);
+    return this.withoutRefreshToken(session);
   }
 
+  @Public()
   @Post("refresh")
-  refresh() {
-    return this.authService.refresh();
+  async refresh(
+    @Body() body: RefreshTokenDto,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const refreshToken =
+      body.refreshToken ?? this.cookieValue(request, "ogfi_refresh");
+    const session = await this.authService.refresh({ refreshToken }, {
+      ipAddress: request.ip,
+      userAgent: request.headers["user-agent"],
+    });
+    this.setRefreshCookie(response, session.refreshToken);
+    return this.withoutRefreshToken(session);
   }
 
   @Post("logout")
-  logout(@CurrentUser() user: AuthenticatedUser, @Req() request: Request) {
-    return this.authService.logout(user, {
+  async logout(
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const result = await this.authService.logout(user, {
       ipAddress: request.ip,
       userAgent: request.headers["user-agent"],
     });
+    response.clearCookie("ogfi_refresh", this.refreshCookieOptions());
+    return result;
   }
 
   @Get("me")
@@ -72,21 +101,32 @@ export class AuthController {
     });
   }
 
-  @Public()
-  @Post("password-reset/request")
-  requestPasswordReset() {
+  private setRefreshCookie(response: Response, refreshToken: string) {
+    response.cookie("ogfi_refresh", refreshToken, this.refreshCookieOptions());
+  }
+
+  private refreshCookieOptions() {
     return {
-      status: "deferred",
-      next: "Password reset workflow will be implemented with notification support.",
+      httpOnly: true,
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+      path: "/api/auth/refresh",
+      sameSite: "lax" as const,
+      secure: process.env.NODE_ENV === "production",
     };
   }
 
-  @Public()
-  @Post("password-reset/confirm")
-  confirmPasswordReset() {
-    return {
-      status: "deferred",
-      next: "Password reset workflow will be implemented with notification support.",
-    };
+  private cookieValue(request: Request, name: string) {
+    const cookies = request.headers.cookie?.split(";") ?? [];
+    const match = cookies
+      .map((cookie) => cookie.trim())
+      .find((cookie) => cookie.startsWith(`${name}=`));
+
+    return match ? decodeURIComponent(match.slice(name.length + 1)) : undefined;
+  }
+
+  private withoutRefreshToken<T extends { refreshToken: string }>(session: T) {
+    const { refreshToken: _refreshToken, ...response } = session;
+
+    return response;
   }
 }

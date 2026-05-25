@@ -23,6 +23,12 @@ type ImportError = {
   values: Record<string, string>;
 };
 
+type ImportRow = {
+  row: number;
+  sheet: ImportSheetKey;
+  values: Record<string, string>;
+};
+
 type ImportResult = {
   created: number;
   errorReportBase64: string | null;
@@ -199,6 +205,8 @@ const sheetOrder: ImportSheetKey[] = [
   "Recipes",
 ];
 
+const maxImportRows = 5000;
+
 @Injectable()
 export class MasterDataImportService {
   constructor(private readonly prisma: PrismaService) {}
@@ -273,6 +281,8 @@ export class MasterDataImportService {
     }
 
     const rowsBySheet = this.readWorkbook(workbook);
+    this.assertRowLimit(rowsBySheet);
+
     const errors: ImportError[] = [];
     const counters = { created: 0, imported: 0, updated: 0 };
 
@@ -346,12 +356,7 @@ export class MasterDataImportService {
   }
 
   private readWorkbook(workbook: ExcelJS.Workbook) {
-    const rowsBySheet: Partial<
-      Record<
-        ImportSheetKey,
-        Array<{ row: number; sheet: ImportSheetKey; values: Record<string, string> }>
-      >
-    > = {};
+    const rowsBySheet: Partial<Record<ImportSheetKey, ImportRow[]>> = {};
 
     for (const sheet of templateSheets) {
       const worksheet = workbook.getWorksheet(sheet.key);
@@ -388,6 +393,21 @@ export class MasterDataImportService {
     }
 
     return rowsBySheet;
+  }
+
+  private assertRowLimit(
+    rowsBySheet: Partial<Record<ImportSheetKey, ImportRow[]>>,
+  ) {
+    const totalRows = Object.values(rowsBySheet).reduce(
+      (total, rows) => total + (rows?.length ?? 0),
+      0,
+    );
+
+    if (totalRows > maxImportRows) {
+      throw new BadRequestException(
+        `Master Data import supports up to ${maxImportRows.toLocaleString()} data rows per workbook.`,
+      );
+    }
   }
 
   private headersFromWorksheet(worksheet: ExcelJS.Worksheet) {

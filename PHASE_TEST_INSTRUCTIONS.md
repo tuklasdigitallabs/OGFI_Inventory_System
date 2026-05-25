@@ -894,3 +894,789 @@ Expected result: role UUIDs, including deterministic seeded UUIDs such as `33333
 ### Known Limitations
 
 - Existing rollback images still contain the old UUID-only contract. Use `/api/build-info` after every emergency image swap to confirm the expected API is live.
+
+## Immediate Fix: Detail Endpoint Location Access
+
+Scope: enforce user location access on record detail endpoints that fetch by ID.
+
+### 1. Transfer Detail Access
+
+- Log in as a user with access to the transfer source and target locations.
+- Open a transfer detail page and transfer variance page.
+- Confirm both pages load.
+- Log in as a user without access to either the source or target location.
+- Attempt to open the same transfer detail and variance URLs directly.
+
+Expected result: authorized users can view transfer details and variance; unauthorized users receive `Location access denied.`
+
+### 2. Purchasing Detail Access
+
+- Log in as a user with access to the purchase order or receiving location.
+- Open a purchase order detail and a receiving detail.
+- Confirm both details load.
+- Log in as a user without access to those locations.
+- Attempt to open the same purchase order and receiving detail URLs directly.
+
+Expected result: authorized users can view the purchasing records; unauthorized users receive `Location access denied.`
+
+### 3. Stock Count Detail Access
+
+- Log in as a user with access to the stock count location.
+- Open a stock count detail.
+- Confirm the detail loads.
+- Log in as a user without access to that location.
+- Attempt to open the same stock count detail URL directly.
+
+Expected result: authorized users can view the stock count; unauthorized users receive `Location access denied.`
+
+### 4. Regression Checks
+
+- Run `npm run api:build`.
+- Run `npm run test -w apps/api -- ledger.service.spec.ts admin.dto.spec.ts`.
+
+Expected result: API compiles and the existing focused API tests pass.
+
+### Known Limitations
+
+- This phase protects the confirmed detail endpoint gaps from the audit. It does not yet refactor list endpoints to default to authenticated user locations when no location filter is supplied.
+
+## Immediate Fix: Atomic Document And Ledger Posting
+
+Scope: keep business document creation/status updates and related ledger events in one database transaction for the high-risk posting flows.
+
+### 1. Store Operations Posting
+
+- Post Wastage with enough stock.
+- Post Issue to Ops with enough stock.
+- Post Emergency Purchase.
+- Post Sales Batch with active recipe consumption.
+- Submit an EOD or Opening stock count with a variance.
+- For each document, confirm the source document exists and the related ledger movement exists.
+- Repeat one flow with invalid stock, missing reason, or missing recipe.
+
+Expected result: successful flows create both the source document and ledger events; failed flows create neither partial documents nor partial ledger events.
+
+### 2. Adjustment Approval
+
+- Create an adjustment request.
+- Approve the adjustment.
+- Confirm the request status becomes `POSTED`.
+- Confirm the request has a linked ledger event.
+- Attempt to approve an invalid or already-posted adjustment request.
+
+Expected result: approval posts the ledger event and updates the adjustment request together; invalid approval does not create a ledger event.
+
+### 3. Transfer Receive And Variance
+
+- Create and approve a transfer.
+- Dispatch it with picked quantity.
+- Receive it with matching quantity.
+- Confirm source `TRANSFER_OUT`, target `TRANSFER_IN`, transfer line received quantity, and transfer status are all updated.
+- Repeat with variance and resolve using Receive Balance.
+- Repeat with variance and resolve using Loss at Source.
+
+Expected result: transfer receive and variance resolution either fully post their ledger movements plus transfer status changes or fail without partial posting.
+
+### 4. Regression Checks
+
+- Run `npm run api:build`.
+- Run `npm run test -w apps/api -- ledger.service.spec.ts admin.dto.spec.ts`.
+
+Expected result: API compiles and the existing focused API tests pass.
+
+### Known Limitations
+
+- This phase improves atomicity for document plus ledger writes. It does not fully solve concurrent stock race conditions; that remains a separate planned production hardening task.
+- Current automated test coverage for these exact service flows is still limited. Use the manual validation flows above until dedicated integration specs are added.
+
+## Immediate Fix: Excel Upload Guardrails
+
+Scope: reject invalid or oversized Excel uploads before import processing and cap workbook data rows.
+
+### 1. Master Data Upload
+
+- Open Admin > Master Data import.
+- Upload a valid `.xlsx` master data template under 5 MB.
+- Confirm the import runs and returns the normal import result or row-level error workbook.
+- Upload a non-`.xlsx` file, such as `.csv` or `.txt`.
+- Upload an `.xlsx` workbook larger than 5 MB.
+- Upload a workbook with more than 5,000 total data rows across import sheets.
+
+Expected result: valid `.xlsx` uploads still process; invalid file type, oversized files, and oversized workbooks return clear validation errors.
+
+### 2. Opening Inventory Upload
+
+- Open the opening inventory upload flow.
+- Upload a valid `.xlsx` count workbook under 5 MB for a location with no existing movements.
+- Confirm the import posts opening inventory or returns the normal row-level error workbook.
+- Upload a non-`.xlsx` file.
+- Upload an `.xlsx` workbook larger than 5 MB.
+- Upload a workbook with more than 2,000 item rows.
+
+Expected result: valid `.xlsx` uploads still process; invalid file type, oversized files, and oversized workbooks return clear validation errors.
+
+### 3. Error Report Re-Upload
+
+- Upload a workbook with row-level validation errors.
+- Download the generated error workbook.
+- Correct the rows in that error workbook and re-upload it.
+
+Expected result: the corrected error workbook remains accepted as a valid `.xlsx`, while the same file size and row limits still apply.
+
+### 4. Regression Checks
+
+- Run `npm run api:build`.
+- Run `npm run test -w apps/api -- ledger.service.spec.ts admin.dto.spec.ts`.
+
+Expected result: API compiles and focused API tests pass.
+
+### Known Limitations
+
+- This phase validates upload type by `.xlsx` extension and browser-provided MIME type before parsing, then still relies on ExcelJS parsing to reject malformed workbook contents.
+- Multer rejects files above the 5 MB API limit before controller logic runs; the final error shape may come from Nest/Multer handling rather than the import service result envelope.
+
+## Immediate Fix: Block Used Item Base UOM Changes
+
+Scope: prevent changing an item's Base UOM after the item has dependent inventory, purchasing, supplier, recipe, or sales records.
+
+### 1. Unused Item Base UOM Edit
+
+- Create a new test item with Base UOM `KG`.
+- Edit that item before adding supplier items, recipes, purchases, counts, or ledger movement.
+- Change Base UOM from `KG` to another active UOM.
+- Save the item.
+
+Expected result: the unused item saves successfully with the new Base UOM.
+
+### 2. Used Item Base UOM Edit
+
+- Select an item that appears in at least one transaction or setup record, such as supplier items, purchase orders, receivings, ledger events, stock counts, transfers, recipes, wastage, issue to ops, emergency purchases, adjustments, or sales batches.
+- Try to change the Base UOM.
+- Save the item.
+
+Expected result: the save is rejected with a clear message that Base UOM cannot be changed because the item is already used.
+
+### 3. Other Item Edits Still Work
+
+- Select the same used item.
+- Change non-Base-UOM fields such as name, low stock threshold, active flag, loose count setup, or category.
+- Save the item.
+
+Expected result: non-Base-UOM edits still save normally when their own validations pass.
+
+### 4. No-Op Base UOM Save
+
+- Select a used item.
+- Save the item while keeping the same Base UOM selected.
+
+Expected result: the save succeeds because the Base UOM value did not change.
+
+### 5. Regression Checks
+
+- Run `npm run api:build`.
+- Run `npm run test -w apps/api -- ledger.service.spec.ts admin.dto.spec.ts`.
+
+Expected result: API compiles and focused API tests pass.
+
+### Known Limitations
+
+- This phase blocks Base UOM changes at the API service layer. It does not add a database trigger, so direct database edits must still be controlled operationally.
+
+## Before Demo: Duplicate Count Controls
+
+Scope: prevent accidental duplicate posted counts for the same location.
+
+### 1. Opening Inventory Upload Duplicate
+
+- Upload opening inventory for a location with no existing inventory movements.
+- Confirm the upload posts successfully.
+- Upload opening inventory again for the same location.
+
+Expected result: the second upload is rejected with a message that opening inventory was already posted for the location.
+
+### 2. Store Operations Opening Count Duplicate
+
+- Post a Beginning count from Store Operations for a test location.
+- Try to post another Beginning count for the same location.
+
+Expected result: the second Beginning count is rejected and references the existing count number.
+
+### 3. Store Operations EOD Count Duplicate
+
+- Post an EOD count for a location and business date.
+- Try to post another EOD count for the same location and same business date.
+- Try to post an EOD count for the same location on a different business date.
+
+Expected result: the duplicate same-date EOD count is rejected; the different-date EOD count is allowed when other validations pass.
+
+### 4. Regression Checks
+
+- Run `npm run api:build`.
+- Run `npm run test -w apps/api -- ledger.service.spec.ts admin.dto.spec.ts`.
+
+Expected result: API compiles and focused API tests pass.
+
+### Known Limitations
+
+- This phase enforces duplicate count rules in the API transaction, but does not add a database unique index. Direct database writes must still be controlled operationally.
+
+## Before Demo: Standalone Receiving UOM Handling
+
+Scope: ensure receiving without a linked PO uses the selected line UOM when posting inventory.
+
+### 1. Standalone Receiving With Base UOM
+
+- Post receiving without `purchaseOrderId`.
+- Use an active supplier, location, item, and the item's Base UOM as the line `uomId`.
+- Enter accepted quantity and unit cost.
+- Open Stock on Hand and inventory movements for the item.
+
+Expected result: ledger `qtyIn` matches the accepted quantity, and unit cost is used as the base unit cost.
+
+### 2. Standalone Receiving With Purchase UOM
+
+- Post receiving without `purchaseOrderId`.
+- Use an active line `uomId` different from the item's Base UOM, such as `SACK`.
+- Confirm a Supplier Item conversion or UOM conversion exists to the item's Base UOM.
+- Enter accepted quantity and unit cost per selected UOM.
+- Open Stock on Hand and inventory movements for the item.
+
+Expected result: ledger `qtyIn` is converted to Base UOM, and `unitCostAtTime` is converted to cost per Base UOM.
+
+### 3. Missing Conversion
+
+- Post standalone receiving with a line UOM that is not the item's Base UOM.
+- Ensure there is no Supplier Item conversion or UOM conversion from that UOM to the item Base UOM.
+
+Expected result: posting is rejected with a clear missing UOM conversion error, and no receiving or ledger movement is created.
+
+### 4. PO-Linked Receiving Regression
+
+- Receive against an approved PO.
+- Enter accepted/rejected quantities in the PO line UOM.
+- Confirm remaining PO quantity and ledger quantity still follow the PO line or supplier item conversion.
+
+Expected result: PO-linked receiving behavior remains unchanged.
+
+### 5. Regression Checks
+
+- Run `npm run api:build`.
+- Run `npm run web:build`.
+- Run `npm run test -w apps/api -- ledger.service.spec.ts admin.dto.spec.ts`.
+
+Expected result: API and web compile, and focused API tests pass.
+
+### Known Limitations
+
+- This phase does not add a Receiving Line UOM database column. The selected UOM is used for posting and stored in ledger metadata, while the existing receiving line table remains unchanged.
+
+## Before Demo: Opening Inventory Unit Cost Validation
+
+Scope: prevent invalid nonblank unit costs from silently posting as zero-cost opening inventory.
+
+### 1. Valid Unit Cost
+
+- Upload opening inventory with a numeric `unitCost`, such as `125.50`.
+- Confirm the upload posts successfully when all other row values are valid.
+
+Expected result: the row posts with the supplied unit cost.
+
+### 2. Blank Unit Cost Fallback
+
+- Upload opening inventory with `unitCost` blank for an item that has an active supplier item default cost.
+- Confirm the upload posts successfully when all other row values are valid.
+
+Expected result: the row uses the supplier item default cost.
+
+### 3. Invalid Nonblank Unit Cost
+
+- Upload opening inventory with `unitCost` set to text, a negative number, or another invalid nonblank value.
+- Download the generated error workbook.
+
+Expected result: the row is rejected, the error workbook includes the original row, and the error says `UNIT COST must be a valid non-negative number.`
+
+### 4. Regression Checks
+
+- Run `npm run api:build`.
+- Run `npm run test -w apps/api -- ledger.service.spec.ts admin.dto.spec.ts`.
+
+Expected result: API compiles and focused API tests pass.
+
+### Known Limitations
+
+- Blank `unitCost` with no supplier item default still posts as zero. That remains allowed for now so users can intentionally load zero-cost stock if the client accepts that policy.
+
+## Before Demo: Clarify Sales Flow
+
+Scope: ensure client testing uses Store Operations Sales Batch, not the placeholder `/api/sales` endpoints.
+
+### 1. Store Operations Sales Batch
+
+- Log in with a role that has `branch.sales-batches:create`.
+- Open Store Operations.
+- Go to Sales Batch.
+- Post a sales batch for an item with an active recipe and enough ingredient stock.
+- Open Inventory Movements for the consumed ingredients.
+
+Expected result: the sales batch posts and creates `SALE_CONSUMPTION` ledger movements.
+
+### 2. Placeholder Sales API Hidden
+
+- Request `/api/sales/batches` directly.
+- Request `/api/sales/batches/{id}` directly.
+
+Expected result: the placeholder sales routes are not available. Sales testing should use `/api/branch/sales-batches`.
+
+### 3. Permission Seed Check
+
+- Reset or seed a local demo database.
+- Open role permissions.
+- Confirm `branch.sales-batches` permissions are present.
+- Confirm new seed data no longer creates `sales.batches` placeholder permissions.
+
+Expected result: client-facing sales permissions point to Store Operations sales batches only.
+
+### 4. Regression Checks
+
+- Run `npm run api:build`.
+- Run `npm run web:build`.
+- Run `npm run test -w apps/api -- ledger.service.spec.ts admin.dto.spec.ts`.
+
+Expected result: API and web compile, and focused API tests pass.
+
+### Known Limitations
+
+- Existing databases may still contain old `sales.batches` permission rows from previous seeds. Those rows are no longer backed by mounted API routes and can be cleaned in a later data-maintenance pass.
+
+## Before Demo: Focused Regression Tests
+
+Scope: add targeted automated tests around the highest-risk demo behaviors.
+
+### 1. Opening Inventory Import Tests
+
+- Run `npm run test -w apps/api -- opening-inventory-import.service.spec.ts`.
+
+Expected result: tests confirm invalid nonblank unit cost becomes a row error, and blank unit cost can fall back to an active supplier item default cost.
+
+### 2. Standalone Receiving UOM Tests
+
+- Run `npm run test -w apps/api -- purchasing.service.spec.ts`.
+
+Expected result: tests confirm standalone receiving converts selected UOM quantity and unit cost into Base UOM, and missing conversion rejects posting.
+
+### 3. Existing Ledger Regression Tests
+
+- Run `npm run test -w apps/api -- ledger.service.spec.ts`.
+
+Expected result: tests continue to cover negative stock rejection, moving average costing, and transfer receipt costing from dispatched transfer cost.
+
+### 4. Full Focused Suite
+
+- Run `npm run test -w apps/api -- ledger.service.spec.ts admin.dto.spec.ts opening-inventory-import.service.spec.ts purchasing.service.spec.ts`.
+- Run `npm run api:build`.
+
+Expected result: all focused tests pass and API compiles.
+
+### Known Limitations
+
+- These are focused service-level tests with mocked Prisma calls. They do not replace future integration tests against a real test database for full receiving, branch operations, transfer variance, and report flows.
+
+## Before Production: Revocable Sessions And Refresh Rotation
+
+Scope: replace access-token-only login behavior with persistent sessions and refresh-token rotation.
+
+### 1. Login Creates Session
+
+- Run the Prisma migration that creates `user_sessions`.
+- Log in through the web app.
+- Confirm `ogfi.accessToken` and `ogfi.refreshToken` are stored in browser local storage.
+- Confirm one active row exists in `user_sessions` for the logged-in user.
+
+Expected result: login returns an access token, refresh token, and user profile; the access token carries a session id.
+
+### 2. Refresh Rotates Token
+
+- Call `POST /api/auth/refresh` with the current refresh token.
+- Confirm a new access token and a new refresh token are returned.
+- Call refresh again with the old refresh token.
+
+Expected result: the new refresh token works; the old refresh token is rejected.
+
+### 3. Logout Revokes Session
+
+- Log in.
+- Call `POST /api/auth/logout`.
+- Try to call `/api/auth/me` with the same access token.
+- Try to call `/api/auth/refresh` with the same refresh token.
+
+Expected result: both access and refresh use are rejected after logout.
+
+### 4. Account Changes Invalidate Sessions
+
+- Log in as a non-admin user.
+- As admin, deactivate that user, reset that user's password, change that user's role, or update that role's permissions.
+- Try using the non-admin user's existing token.
+
+Expected result: existing sessions are rejected and the user must sign in again.
+
+### 5. Password Change
+
+- Log in as a user in two browsers.
+- Change the password in one browser.
+- Try using the second browser session.
+
+Expected result: other active sessions for the user are revoked. The browser that changed the password remains signed in.
+
+### 6. Regression Checks
+
+- Run `npm run api:prisma:generate`.
+- Run `npm run api:build`.
+- Run `npm run web:build`.
+- Run `npm run test -w apps/api -- ledger.service.spec.ts admin.dto.spec.ts opening-inventory-import.service.spec.ts purchasing.service.spec.ts`.
+
+Expected result: Prisma client generates, API and web compile, and focused API tests pass.
+
+### Known Limitations
+
+- Existing access tokens issued before this phase do not contain a session id and will require users to sign in again after deployment.
+- Refresh tokens are stored in browser local storage in this pass to match the existing client architecture. Moving refresh tokens to secure HTTP-only cookies remains a future hardening step.
+
+## Before Production: Database-Backed Document Numbering
+
+Scope: replace same-day row-count document numbering with an atomic database counter.
+
+### 1. Migration
+
+- Apply the migration that creates `document_sequences`.
+- Confirm the table has a unique key on `prefix` plus `sequenceDate`.
+
+Expected result: document sequence state is independent from existing business documents.
+
+### 2. Purchasing And Receiving Numbers
+
+- Create multiple POs on the same day.
+- Post multiple receiving records on the same day.
+- Confirm numbers keep the existing readable format, such as `PO-YYYYMMDD-0001` and `RR-YYYYMMDD-0001`.
+
+Expected result: numbers increment by prefix and day.
+
+### 3. Inventory Document Numbers
+
+- Create a transfer, adjustment request, opening inventory count, EOD stock count, wastage, issue to ops, emergency purchase, and sales batch.
+- Confirm each document uses its expected prefix: `TR`, `ADJ`, `OPN`, `SC`, `WA`, `IO`, `EP`, and `SB`.
+
+Expected result: each prefix has its own sequence for the day.
+
+### 4. Concurrent Posting
+
+- From two browser sessions or API clients, submit the same document type at nearly the same time.
+- Repeat for at least PO, receiving, and stock count.
+
+Expected result: concurrent requests receive unique document numbers instead of colliding on the unique document-number field.
+
+### 5. Regression Checks
+
+- Run `npm run api:prisma:generate`.
+- Run `npm run api:build`.
+- Run `npm run test -w apps/api -- document-numbering.spec.ts ledger.service.spec.ts admin.dto.spec.ts opening-inventory-import.service.spec.ts purchasing.service.spec.ts`.
+
+Expected result: Prisma client generates, API compiles, and focused tests pass.
+
+### Known Limitations
+
+- This phase makes document number generation atomic. It does not by itself solve stock-balance race conditions, which remain in the next production-hardening task.
+
+## Before Production: Concurrency-Safe Stock Posting
+
+Scope: serialize ledger-backed stock postings per location and item before recalculating stock state.
+
+### 1. Advisory Lock Verification
+
+- Run `npm run test -w apps/api -- ledger.service.spec.ts`.
+
+Expected result: tests confirm ledger posting takes a PostgreSQL transaction advisory lock before reading stock history for the item/location.
+
+### 2. Concurrent Outbound Posting
+
+- Seed one location/item with limited stock.
+- From two API clients, post outbound movements for the same location/item at nearly the same time where the combined quantity exceeds stock on hand.
+
+Expected result: one posting may succeed, but the later posting rechecks stock after the first commit and is rejected before stock goes negative.
+
+### 3. Concurrent Receive And Outbound
+
+- From two API clients, post a receive and an outbound movement for the same location/item at nearly the same time.
+- Review inventory movements and stock on hand.
+
+Expected result: postings are serialized for the same location/item and average costing reflects the final ledger order.
+
+### 4. Transfer Receive Regression
+
+- Receive a dispatched transfer with at least one line.
+- Confirm source `TRANSFER_OUT`, target `TRANSFER_IN`, transfer line status, and final stock values remain correct.
+
+Expected result: transfer posting still succeeds and uses the same ledger-backed locking path.
+
+### 5. Regression Checks
+
+- Run `npm run api:build`.
+- Run `npm run test -w apps/api -- document-numbering.spec.ts ledger.service.spec.ts admin.dto.spec.ts opening-inventory-import.service.spec.ts purchasing.service.spec.ts`.
+
+Expected result: API compiles and focused tests pass.
+
+### Known Limitations
+
+- This phase protects stock movements that post through `LedgerService`. Some pre-posting availability checks, such as transfer reservation checks before dispatch, still calculate availability before their final document update. The ledger posting lock prevents negative stock at movement time; deeper reservation locking remains a future hardening step.
+
+## Before Production: Preserve Audit Logs During Resets
+
+Scope: ensure demo-data reset does not silently remove audit history.
+
+### 1. Dry Run
+
+- Run `npm run api:demo-data:reset -- --dry-run`.
+
+Expected result: the command reports that audit logs are preserved and makes no database changes.
+
+### 2. Reset Behavior
+
+- In a local or approved demo database, create at least one audit log entry.
+- Run `npm run api:demo-data:reset -- --yes`.
+- Open Admin > Audit Trail.
+
+Expected result: previous audit logs remain, and a new `admin / demo-data.reset` audit entry records the reset, target database, backup path, operator, and timestamp.
+
+### 3. Backup Requirement
+
+- Run the reset without `--yes`.
+- Run the reset in an unsafe environment name or production-looking database target.
+
+Expected result: reset is refused before any data is changed.
+
+### 4. Regression Checks
+
+- Run `node --check scripts/reset-demo-data.js`.
+- Run `node --check scripts/db-reset-helpers.js`.
+
+Expected result: reset scripts parse successfully.
+
+### Known Limitations
+
+- This phase preserves audit logs for the demo-data reset script. Any future production-specific reset runbook must keep the same rule: preserve or archive audit logs before destructive cleanup.
+
+## Before Production: Store Generated Report Output
+
+Scope: make completed report downloads immutable snapshots instead of regenerating from live data.
+
+### 1. Migration
+
+- Apply the migration that adds `outputContent` to `report_runs`.
+
+Expected result: completed report runs can store generated CSV content.
+
+### 2. Generate And Download
+
+- Run a Stock On Hand report.
+- Download the completed report.
+- Add or change inventory movement data that would alter the live report result.
+- Download the same completed report again.
+
+Expected result: the second download returns the same CSV content as the first download.
+
+### 3. Failed Report
+
+- Run a report with invalid parameters or force a report-generation error in a local test.
+- Open report runs.
+
+Expected result: the report run keeps `FAILED` status and the error message remains available for troubleshooting.
+
+### 4. Regression Checks
+
+- Run `npm run api:prisma:generate`.
+- Run `npm run api:build`.
+- Run `npm run test -w apps/api -- reports.service.spec.ts document-numbering.spec.ts ledger.service.spec.ts admin.dto.spec.ts opening-inventory-import.service.spec.ts purchasing.service.spec.ts`.
+
+Expected result: Prisma client generates, API compiles, and focused tests pass.
+
+### Known Limitations
+
+- Report output is stored in the database as CSV text. If reports become very large, move report content to object/file storage and store a stable pointer plus checksum.
+
+## Before Production: Harden Production Authentication Defaults
+
+Scope: remove shared temporary credentials and production-facing login hints.
+
+### 1. Create User
+
+- Open Admin > Users.
+- Create a new user with valid role and location access.
+- Note the temporary password notice shown after saving.
+- Sign out and sign in as the new user with that temporary password.
+
+Expected result: the login succeeds, the user is required to change password, and no shared default password is needed.
+
+### 2. Reset User Password
+
+- Open Admin > Users.
+- Reset an existing user's password.
+- Note the new temporary password notice.
+- Try the old password for that user, then try the new temporary password.
+
+Expected result: the old password fails, the new temporary password succeeds, and the user is required to change password.
+
+### 3. Login Form
+
+- Open the app in a fresh browser profile or after clearing local storage.
+
+Expected result: the username/email field is empty by default.
+
+### 4. Regression Checks
+
+- Run `npm run api:build`.
+- Run `npm run web:build`.
+- Run `npm run test -w apps/api -- password-policy.spec.ts admin.dto.spec.ts`.
+
+Expected result: API and web compile, and focused auth/admin tests pass.
+
+### Known Limitations
+
+- Temporary passwords are shown only once immediately after user creation or reset. Admins must securely communicate them before leaving the screen.
+
+## Before Production: Rate Limiting And Monitoring
+
+Scope: use a shared rate-limit backend when configured and expose operational health checks.
+
+### 1. Redis-Backed Rate Limiting
+
+- Set `RATE_LIMIT_REDIS_URL` or `REDIS_URL` for the API process.
+- Start the API.
+- Send repeated requests to `/api/auth/login` from the same client IP.
+
+Expected result: login requests are limited after the configured threshold, `Retry-After` is returned, and the API logs a structured `rate_limit.exceeded` warning.
+
+### 2. Local Fallback
+
+- Start the API without `RATE_LIMIT_REDIS_URL` or `REDIS_URL`.
+- Repeat the same login-limit test.
+
+Expected result: rate limiting still works using the in-memory fallback for local/single-instance use.
+
+### 3. Liveness
+
+- Request `GET /api/health`.
+
+Expected result: response returns `status: ok` without requiring authentication or database access.
+
+### 4. Readiness
+
+- Request `GET /api/ready`.
+- If web monitoring is required, set `WEB_HEALTH_URL` to the deployed web URL before starting the API.
+
+Expected result: response includes API, database, migration, and web checks. Database or failed-migration errors return HTTP 503. Web is reported as `skipped` when `WEB_HEALTH_URL` is not configured.
+
+### 5. Regression Checks
+
+- Run `npm run api:build`.
+- Run `npm run test -w apps/api -- app.controller.spec.ts rate-limit.spec.ts password-policy.spec.ts admin.dto.spec.ts`.
+
+Expected result: API compiles and focused monitoring/auth tests pass.
+
+### Known Limitations
+
+- Redis is enabled by configuration only. Production deployment must provide `RATE_LIMIT_REDIS_URL` or `REDIS_URL` so limits are shared across API instances.
+- The API readiness endpoint can check web health only when `WEB_HEALTH_URL` is configured.
+
+## Re-Audit Patch: Location Scoping And API Surface
+
+Scope: patch high-priority findings from `docs/INVENTORY_SYSTEM_REAUDIT_2026-05-26.md`.
+
+### 1. List Location Scoping
+
+- Log in as a branch user with access to one location.
+- Open stock on hand, inventory movements, adjustment requests, transfers, purchase orders, store operations lists, and menu pricing without manually selecting a location filter.
+- Repeat direct API calls without `locationId`.
+
+Expected result: each list returns only records in the user's allowed locations. Transfer lists may show transfers where the user's location is either source or target.
+
+### 2. Explicit Location Filter
+
+- As the same branch user, request each list with an allowed `locationId`.
+- Repeat with a disallowed `locationId`.
+
+Expected result: allowed filters work; disallowed filters return `Location access denied.`
+
+### 3. Ledger Event Detail
+
+- Open a ledger event belonging to the user's allowed location.
+- Attempt to open a ledger event from another location by direct URL/API call.
+
+Expected result: allowed event loads; disallowed event returns `Location access denied.`
+
+### 4. Password Reset Placeholder Routes
+
+- Call `POST /api/auth/password-reset/request`.
+- Call `POST /api/auth/password-reset/confirm`.
+
+Expected result: both routes are no longer available. Password resets are handled through Admin > Users.
+
+### 5. Redis Rate Limit Atomicity
+
+- Run the focused rate-limit tests.
+- In a Redis-backed environment, trigger rate limiting on `/api/auth/login`.
+
+Expected result: the Redis rate limiter increments and applies TTL through one script, and exceeded requests still return `429` with `Retry-After`.
+
+### 6. Regression Checks
+
+- Run `npm run api:build`.
+- Run `npm run test -w apps/api -- ledger.service.spec.ts rate-limit.spec.ts admin.dto.spec.ts`.
+
+Expected result: API compiles and focused tests pass.
+
+### Known Limitations
+
+- Refresh tokens are stored in an HttpOnly API cookie. Access tokens are session-scoped in browser storage so page reload can refresh from the cookie, but a full browser close requires a refresh cookie that is still valid.
+- Existing report runs created before `scopeLocationIds` was added use the legacy JSON-parameter readability fallback.
+
+## Re-Audit Patch: Token Storage And Report Run Scope
+
+Scope: patch the remaining open findings from `docs/INVENTORY_SYSTEM_REAUDIT_2026-05-26.md`.
+
+### 1. Login And Refresh Cookie
+
+- Sign in with valid credentials.
+- Inspect browser localStorage.
+- Refresh the page.
+
+Expected result: no `ogfi.accessToken` or `ogfi.refreshToken` is stored in localStorage. The API sets an HttpOnly refresh cookie, and the page can restore the session by calling refresh.
+
+### 2. Refresh Rotation
+
+- Sign in and let an API request refresh the access token, or call `POST /api/auth/refresh`.
+- Inspect the response body.
+
+Expected result: the response includes a new access token and user, but does not include the refresh token. The refresh token rotates through the HttpOnly cookie.
+
+### 3. Logout
+
+- Sign out.
+- Refresh the page.
+
+Expected result: the session is not restored, the refresh cookie is cleared, and legacy token keys are removed from localStorage.
+
+### 4. Report Run Listing
+
+- Run a report for one location.
+- Log in as a user without that location.
+- Open Reports > Runs.
+
+Expected result: the report run is filtered by stored `scopeLocationIds` and is not listed for users outside that location.
+
+### 5. Regression Checks
+
+- Run `npm run api:prisma:generate`.
+- Run `npm run api:build`.
+- Run `npm run web:build`.
+- Run `npm run test -w apps/api -- reports.service.spec.ts rate-limit.spec.ts ledger.service.spec.ts admin.dto.spec.ts`.
+
+Expected result: Prisma client generates, API and web compile, and focused tests pass.

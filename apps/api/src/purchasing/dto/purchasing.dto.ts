@@ -104,6 +104,10 @@ export class ReceivingLineDto {
   @IsUUID()
   itemId!: string;
 
+  @IsOptional()
+  @IsUUID()
+  uomId?: string;
+
   @Type(() => Number)
   @Min(0)
   acceptedQty!: number;

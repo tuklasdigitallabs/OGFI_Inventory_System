@@ -3,7 +3,7 @@
 import { Fragment, FormEvent, useEffect, useMemo, useState } from "react";
 import {
   ApiClient,
-  TOKEN_KEY,
+  getSessionAccessToken,
   type AuthenticatedUser,
   type MasterDataRecord,
   type StockOnHandRow,
@@ -134,7 +134,7 @@ export function TransfersLivePage({ screen }: TransfersLivePageProps) {
     let cancelled = false;
 
     async function loadTransfers() {
-      const token = window.localStorage.getItem(TOKEN_KEY);
+      const token = getSessionAccessToken();
 
       if (!token) {
         setError("Sign in again to load transfers.");
@@ -1310,7 +1310,7 @@ function createLineForm(): TransferLineForm {
 }
 
 async function clientFromSession() {
-  const token = window.localStorage.getItem(TOKEN_KEY);
+  const token = getSessionAccessToken();
 
   if (!token) {
     throw new Error("Sign in again to continue.");

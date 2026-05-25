@@ -11,11 +11,16 @@ import { Prisma, User } from "@prisma/client";
 import { createChallenge, verifySolution } from "altcha-lib";
 import { deriveKey } from "altcha-lib/algorithms/pbkdf2";
 import * as bcrypt from "bcrypt";
+import { createHash, randomBytes } from "crypto";
 import { AuditService } from "../audit/audit.service";
 import { PrismaService } from "../prisma/prisma.service";
-import { ChangePasswordDto, LoginDto, OfflinePinDto } from "./dto/login.dto";
 import {
-  defaultTemporaryPassword,
+  ChangePasswordDto,
+  LoginDto,
+  OfflinePinDto,
+  RefreshTokenDto,
+} from "./dto/login.dto";
+import {
   maxDailyRestrictions,
   maxFailedLoginAttempts,
   restrictionWindowMs,
@@ -28,6 +33,7 @@ interface RequestAuditMetadata {
 }
 
 const offlinePinSettingKey = "offline_pin_policy";
+const refreshTokenBytes = 48;
 
 type OfflinePinSettingValue = {
   passwordHash: string;
@@ -130,16 +136,12 @@ export class AuthService {
       userAgent: metadata.userAgent,
     });
 
-    const accessToken = await this.jwtService.signAsync(
-      { sub: user.id },
-      {
-        expiresIn: this.config.get<string>("JWT_ACCESS_TTL") ?? "15m",
-        secret: this.jwtSecret(),
-      },
-    );
+    const session = await this.createSession(user.id, metadata);
+    const accessToken = await this.signAccessToken(user.id, session.id);
 
     return {
       accessToken,
+      refreshToken: session.refreshToken,
       tokenType: "Bearer",
       expiresIn: this.config.get<string>("JWT_ACCESS_TTL") ?? "15m",
       user: this.toAuthenticatedUser(authenticatedUser),
@@ -207,6 +209,10 @@ export class AuthService {
       },
     });
 
+    if (updated.restrictedAt || updated.lockedAt) {
+      await this.revokeUserSessions(user.id);
+    }
+
     await this.auditService.record("auth", "login.failed", {
       userId: user.id,
       after: {
@@ -257,12 +263,6 @@ export class AuthService {
     user: AuthenticatedUser,
     metadata: RequestAuditMetadata = {},
   ) {
-    if (dto.newPassword === defaultTemporaryPassword) {
-      throw new BadRequestException(
-        "Choose a password different from the temporary password.",
-      );
-    }
-
     const existing = await this.prisma.user.findUnique({
       where: { id: user.id },
     });
@@ -300,6 +300,8 @@ export class AuthService {
       ipAddress: metadata.ipAddress,
       userAgent: metadata.userAgent,
     });
+
+    await this.revokeUserSessions(user.id, user.sessionId);
 
     return this.toAuthenticatedUser(updated);
   }
@@ -366,14 +368,72 @@ export class AuthService {
     };
   }
 
-  refresh() {
+  async refresh(dto: RefreshTokenDto, metadata: RequestAuditMetadata = {}) {
+    if (!dto.refreshToken) {
+      throw new UnauthorizedException("Session expired. Sign in again.");
+    }
+
+    const tokenHash = this.hashRefreshToken(dto.refreshToken);
+    const session = await this.prisma.userSession.findUnique({
+      where: { refreshTokenHash: tokenHash },
+      include: {
+        user: {
+          include: {
+            role: {
+              include: {
+                permissions: {
+                  include: {
+                    permission: true,
+                  },
+                },
+              },
+            },
+            locationAccess: true,
+          },
+        },
+      },
+    });
+
+    if (
+      !session ||
+      session.revokedAt ||
+      session.expiresAt.getTime() <= Date.now()
+    ) {
+      throw new UnauthorizedException("Session expired. Sign in again.");
+    }
+
+    this.assertAccountCanLogin(session.user);
+
+    const refreshToken = this.generateRefreshToken();
+    const updated = await this.prisma.userSession.update({
+      where: { id: session.id },
+      data: {
+        refreshTokenHash: this.hashRefreshToken(refreshToken),
+        expiresAt: this.refreshExpiresAt(),
+        lastUsedAt: new Date(),
+        ipAddress: metadata.ipAddress,
+        userAgent: metadata.userAgent,
+      },
+    });
+    const accessToken = await this.signAccessToken(session.userId, updated.id);
+
     return {
-      status: "deferred",
-      next: "Refresh token rotation is deferred until persistent refresh token storage is added.",
+      accessToken,
+      refreshToken,
+      tokenType: "Bearer",
+      expiresIn: this.config.get<string>("JWT_ACCESS_TTL") ?? "15m",
+      user: this.toAuthenticatedUser(session.user),
     };
   }
 
   async logout(user: AuthenticatedUser, metadata: RequestAuditMetadata = {}) {
+    if (user.sessionId) {
+      await this.prisma.userSession.updateMany({
+        where: { id: user.sessionId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+    }
+
     await this.auditService.record("auth", "logout", {
       userId: user.id,
       ipAddress: metadata.ipAddress,
@@ -383,6 +443,60 @@ export class AuthService {
     return {
       status: "logged_out",
     };
+  }
+
+  private async createSession(
+    userId: string,
+    metadata: RequestAuditMetadata = {},
+  ) {
+    const refreshToken = this.generateRefreshToken();
+    const session = await this.prisma.userSession.create({
+      data: {
+        userId,
+        refreshTokenHash: this.hashRefreshToken(refreshToken),
+        expiresAt: this.refreshExpiresAt(),
+        ipAddress: metadata.ipAddress,
+        userAgent: metadata.userAgent,
+      },
+    });
+
+    return { id: session.id, refreshToken };
+  }
+
+  private generateRefreshToken() {
+    return randomBytes(refreshTokenBytes).toString("base64url");
+  }
+
+  private hashRefreshToken(token: string) {
+    return createHash("sha256").update(token).digest("hex");
+  }
+
+  private refreshExpiresAt() {
+    const ttlDays = Number(this.config.get<string>("JWT_REFRESH_TTL_DAYS") ?? 7);
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + ttlDays);
+    return expiresAt;
+  }
+
+  private signAccessToken(userId: string, sessionId: string) {
+    return this.jwtService.signAsync(
+      { sid: sessionId, sub: userId },
+      {
+        expiresIn: this.config.get<string>("JWT_ACCESS_TTL") ?? "15m",
+        secret: this.jwtSecret(),
+      },
+    );
+  }
+
+  private revokeUserSessions(userId: string, exceptSessionId?: string) {
+    return this.prisma.userSession.updateMany({
+      where: {
+        userId,
+        revokedAt: null,
+        id: exceptSessionId ? { not: exceptSessionId } : undefined,
+      },
+      data: { revokedAt: new Date() },
+    });
   }
 
   private toAuthenticatedUser(
@@ -418,6 +532,7 @@ export class AuthService {
         ({ permission }) => `${permission.module}:${permission.action}`,
       ),
       locationIds: user.locationAccess.map(({ locationId }) => locationId),
+      sessionId: "sessionId" in user ? String(user.sessionId) : undefined,
     };
   }
 

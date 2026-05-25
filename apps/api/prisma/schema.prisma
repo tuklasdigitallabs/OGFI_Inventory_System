@@ -171,11 +171,42 @@ model User {
   createdMenuPrices                      MenuPrice[]              @relation("MenuPriceCreatedBy")
   approvedMenuPrices                     MenuPrice[]              @relation("MenuPriceApprovedBy")
   syncBatches                            SyncBatch[]              @relation("SyncBatchSubmittedBy")
+  sessions                               UserSession[]
   createdAt                              DateTime                 @default(now())
   updatedAt                              DateTime                 @updatedAt
 
   @@index([roleId])
   @@map("users")
+}
+
+model UserSession {
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @db.Uuid
+  refreshTokenHash String    @unique
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  lastUsedAt       DateTime?
+  ipAddress        String?
+  userAgent        String?
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+  @@map("user_sessions")
+}
+
+model DocumentSequence {
+  id           String   @id @default(uuid()) @db.Uuid
+  prefix       String
+  sequenceDate DateTime @db.Date
+  value        Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([prefix, sequenceDate])
+  @@map("document_sequences")
 }
 
 model Role {
@@ -869,7 +900,9 @@ model ReportRun {
   status        ReportStatus @default(QUEUED)
   format        ReportFormat
   parameters    Json
+  scopeLocationIds String[]     @default([])
   outputUrl     String?
+  outputContent String?
   error         String?
   requestedById String?      @db.Uuid
   startedAt     DateTime?

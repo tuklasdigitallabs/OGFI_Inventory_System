@@ -89,8 +89,6 @@ const permissions = [
   ["branch.emergency-purchases", "create", "Record emergency purchases"],
   ["branch.sales-batches", "read", "View branch sales batches"],
   ["branch.sales-batches", "create", "Create branch sales batches"],
-  ["sales.batches", "read", "View sales batches"],
-  ["sales.batches", "create", "Create sales batches"],
   ["reports", "read", "View reports"],
   ["reports", "run", "Run reports"],
   ["sync", "read", "View sync status"],

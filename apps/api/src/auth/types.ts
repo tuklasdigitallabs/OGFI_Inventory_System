@@ -13,8 +13,10 @@ export interface AuthenticatedUser {
   };
   permissions: string[];
   locationIds: string[];
+  sessionId?: string;
 }
 
 export interface AccessTokenPayload {
   sub: string;
+  sid: string;
 }

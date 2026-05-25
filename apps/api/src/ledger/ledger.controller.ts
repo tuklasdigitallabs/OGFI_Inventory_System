@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -24,6 +25,17 @@ import { ReverseLedgerEventDto } from './dto/reverse-ledger-event.dto';
 import { LedgerService } from './ledger.service';
 import { OpeningInventoryImportService } from './opening-inventory-import.service';
 
+const importFileMaxSizeBytes = 5 * 1024 * 1024;
+const xlsxMimeType =
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+type UploadedWorkbook = {
+  buffer?: Buffer;
+  mimetype?: string;
+  originalname?: string;
+  size?: number;
+};
+
 @Controller()
 export class LedgerController {
   constructor(
@@ -34,29 +46,44 @@ export class LedgerController {
   @Get('inventory/stock-on-hand')
   @Permissions('inventory.stock:read')
   @LocationAccess({ source: 'query', key: 'locationId' })
-  stockOnHand(@Query() query: Record<string, string>) {
-    return this.ledgerService.list('inventory.stock-on-hand', query);
+  stockOnHand(
+    @Query() query: Record<string, string>,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.ledgerService.list('inventory.stock-on-hand', query, user);
   }
 
   @Get('inventory/movements')
   @Permissions('inventory.movements:read')
   @LocationAccess({ source: 'query', key: 'locationId' })
-  movements(@Query() query: Record<string, string>) {
-    return this.ledgerService.list('inventory.movements', query);
+  movements(
+    @Query() query: Record<string, string>,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.ledgerService.list('inventory.movements', query, user);
   }
 
   @Get('inventory/adjustment-requests')
   @Permissions('inventory.adjustments:read')
   @LocationAccess({ source: 'query', key: 'locationId' })
-  adjustmentRequests(@Query() query: Record<string, string>) {
-    return this.ledgerService.list('inventory.adjustment-requests', query);
+  adjustmentRequests(
+    @Query() query: Record<string, string>,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.ledgerService.list(
+      'inventory.adjustment-requests',
+      query,
+      user,
+    );
   }
 
   @Post('inventory/opening-inventory/import')
   @Permissions('ledger.events:post')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(
+    FileInterceptor('file', { limits: { fileSize: importFileMaxSizeBytes } }),
+  )
   importOpeningInventory(
-    @UploadedFile() file: { buffer?: Buffer } | undefined,
+    @UploadedFile() file: UploadedWorkbook | undefined,
     @Body() body: { businessDate: string; locationId: string },
     @CurrentUser() user: AuthenticatedUser,
     @Req() request: Request,
@@ -79,6 +106,8 @@ export class LedgerController {
         stockCountNumber: null,
       };
     }
+
+    this.assertXlsxUpload(file);
 
     return this.openingInventoryImportService.importWorkbook(
       file.buffer,
@@ -162,7 +191,22 @@ export class LedgerController {
 
   @Get('ledger/events/:id')
   @Permissions('ledger.events:read')
-  getEvent(@Param('id') id: string) {
-    return this.ledgerService.list('ledger.events.detail', { id });
+  getEvent(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.ledgerService.list('ledger.events.detail', { id }, user);
+  }
+
+  private assertXlsxUpload(file: UploadedWorkbook) {
+    const hasXlsxExtension = file.originalname?.toLowerCase().endsWith('.xlsx');
+
+    if (file.size && file.size > importFileMaxSizeBytes) {
+      throw new BadRequestException('Upload file must be 5 MB or smaller.');
+    }
+
+    if (file.mimetype !== xlsxMimeType || !hasXlsxExtension) {
+      throw new BadRequestException('Upload a valid .xlsx workbook.');
+    }
   }
 }

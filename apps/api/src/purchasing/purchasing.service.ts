@@ -13,6 +13,7 @@ import {
 } from "@prisma/client";
 import { randomUUID } from "crypto";
 import { AuthenticatedUser } from "../auth/types";
+import { nextBusinessDocumentNumber } from "../common/document-numbering";
 import { PrismaService } from "../prisma/prisma.service";
 import {
   ApprovePurchaseOrderDto,
@@ -112,12 +113,16 @@ export class PurchasingService {
     });
   }
 
-  async list(resource: string, query: Record<string, string> = {}) {
+  async list(
+    resource: string,
+    query: Record<string, string> = {},
+    user?: AuthenticatedUser,
+  ) {
     if (resource === "purchase-orders") {
       const purchaseOrders = await this.prisma.purchaseOrder.findMany({
         where: {
           supplierId: query.supplierId,
-          locationId: query.locationId,
+          locationId: this.locationFilter(query.locationId, user),
           status: query.status as DocumentStatus | undefined,
         },
         include: {
@@ -167,6 +172,10 @@ export class PurchasingService {
         throw new NotFoundException("Purchase order not found.");
       }
 
+      if (user) {
+        this.assertUserCanAccessLocation(user, purchaseOrder.locationId);
+      }
+
       return this.toPurchaseOrderResponse(purchaseOrder);
     }
 
@@ -178,6 +187,10 @@ export class PurchasingService {
 
       if (!receiving) {
         throw new NotFoundException("Receiving not found.");
+      }
+
+      if (user) {
+        this.assertUserCanAccessLocation(user, receiving.locationId);
       }
 
       return this.toReceivingResponse(receiving);
@@ -498,6 +511,7 @@ export class PurchasingService {
           tx,
           line,
           purchaseOrderLine,
+          dto.lines.find((dtoLine) => dtoLine.itemId === line.itemId),
         );
 
         await tx.ledgerEvent.create({
@@ -520,6 +534,10 @@ export class PurchasingService {
               ledgerBaseQty: ledgerCost.qtyIn.toString(),
               receivingNumber: receiving.receivingNumber,
               purchaseOrderId: receiving.purchaseOrderId,
+              receivedUomId:
+                purchaseOrderLine?.uomId ??
+                dto.lines.find((dtoLine) => dtoLine.itemId === line.itemId)
+                  ?.uomId,
             },
           },
         });
@@ -665,14 +683,29 @@ export class PurchasingService {
     purchaseOrderLine?: Prisma.PurchaseOrderLineGetPayload<
       Record<string, never>
     >,
+    receivingLine?: CreateReceivingDto["lines"][number],
   ) {
     const acceptedQty = new Prisma.Decimal(line.acceptedQty);
     const documentUnitCost = new Prisma.Decimal(line.unitCost);
 
     if (!purchaseOrderLine) {
+      if (!receivingLine?.uomId) {
+        throw new BadRequestException(
+          "UOM is required for standalone receiving lines.",
+        );
+      }
+
+      const qtyIn = await this.purchaseQtyToBaseQty(
+        tx,
+        line.itemId,
+        receivingLine.uomId,
+        acceptedQty,
+        null,
+      );
+
       return {
-        qtyIn: acceptedQty,
-        unitCostAtTime: documentUnitCost,
+        qtyIn,
+        unitCostAtTime: documentUnitCost.mul(acceptedQty).div(qtyIn),
       };
     }
 
@@ -797,7 +830,17 @@ export class PurchasingService {
     tx: Prisma.TransactionClient,
     dto: CreateReceivingDto,
   ) {
-    const [supplier, location, items] = await Promise.all([
+    const receivingUomIds = dto.lines
+      .map((line) => line.uomId)
+      .filter((uomId): uomId is string => Boolean(uomId));
+
+    if (receivingUomIds.length !== dto.lines.length) {
+      throw new BadRequestException(
+        "UOM is required for standalone receiving lines.",
+      );
+    }
+
+    const [supplier, location, items, uoms] = await Promise.all([
       tx.supplier.findFirst({
         where: { id: dto.supplierId, active: true },
         select: { id: true },
@@ -809,6 +852,13 @@ export class PurchasingService {
       tx.item.findMany({
         where: {
           id: { in: dto.lines.map((line) => line.itemId) },
+          active: true,
+        },
+        select: { id: true },
+      }),
+      tx.uom.findMany({
+        where: {
+          id: { in: receivingUomIds },
           active: true,
         },
         select: { id: true },
@@ -828,6 +878,22 @@ export class PurchasingService {
       items.map((item) => item.id),
       "One or more items do not exist or are inactive.",
     );
+    this.assertAllTargetsFound(
+      receivingUomIds.filter((uomId): uomId is string => Boolean(uomId)),
+      uoms.map((uom) => uom.id),
+      "One or more UOMs do not exist or are inactive.",
+    );
+
+    for (const line of dto.lines) {
+      const acceptedQty = new Prisma.Decimal(line.acceptedQty);
+      const rejectedQty = new Prisma.Decimal(line.rejectedQty ?? 0);
+
+      if (acceptedQty.add(rejectedQty).lte(0)) {
+        throw new BadRequestException(
+          "Each receiving line must include accepted or rejected quantity.",
+        );
+      }
+    }
   }
 
   private async validateReceivingPurchaseOrder(
@@ -994,23 +1060,7 @@ export class PurchasingService {
     tx: Prisma.TransactionClient,
     prefix: "PO" | "RR",
   ) {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-
-    const end = new Date(start);
-    end.setDate(end.getDate() + 1);
-
-    const count =
-      prefix === "PO"
-        ? await tx.purchaseOrder.count({
-            where: { createdAt: { gte: start, lt: end } },
-          })
-        : await tx.receiving.count({
-            where: { createdAt: { gte: start, lt: end } },
-          });
-
-    const datePart = start.toISOString().slice(0, 10).replace(/-/g, "");
-    return `${prefix}-${datePart}-${String(count + 1).padStart(4, "0")}`;
+    return nextBusinessDocumentNumber(tx, prefix);
   }
 
   private assertAllTargetsFound(
@@ -1032,6 +1082,17 @@ export class PurchasingService {
     if (!user.locationIds.includes(locationId)) {
       throw new ForbiddenException("Location access denied.");
     }
+  }
+
+  private locationFilter(locationId?: string, user?: AuthenticatedUser) {
+    if (locationId) {
+      if (user) {
+        this.assertUserCanAccessLocation(user, locationId);
+      }
+      return locationId;
+    }
+
+    return user ? { in: user.locationIds } : undefined;
   }
 
   private async recordAudit(

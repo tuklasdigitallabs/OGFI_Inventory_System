@@ -8,7 +8,7 @@ import { Icon } from "@/lib/icons";
 import type { Kpi, Screen } from "@/lib/screens";
 import {
   ApiClient,
-  TOKEN_KEY,
+  getSessionAccessToken,
   type AdjustmentRequest,
   type AuthenticatedUser,
   type LedgerMovementRow,
@@ -152,7 +152,7 @@ export function InventoryLivePage({ screen }: InventoryLivePageProps) {
     let cancelled = false;
 
     async function loadInventory() {
-      const token = window.localStorage.getItem(TOKEN_KEY);
+      const token = getSessionAccessToken();
 
       if (!token) {
         setState({
@@ -340,7 +340,7 @@ export function InventoryLivePage({ screen }: InventoryLivePageProps) {
   }
 
   async function refreshInventory() {
-    const token = window.localStorage.getItem(TOKEN_KEY);
+    const token = getSessionAccessToken();
 
     if (!token) {
       throw new Error("Sign in again to refresh inventory data.");
@@ -399,7 +399,7 @@ export function InventoryLivePage({ screen }: InventoryLivePageProps) {
         throw new Error("Select the branch/store for this opening inventory.");
       }
 
-      const token = window.localStorage.getItem(TOKEN_KEY);
+      const token = getSessionAccessToken();
 
       if (!token) {
         throw new Error("Sign in again to upload opening inventory.");
@@ -477,7 +477,7 @@ export function InventoryLivePage({ screen }: InventoryLivePageProps) {
         throw new Error("Enter a valid unit cost.");
       }
 
-      const token = window.localStorage.getItem(TOKEN_KEY);
+      const token = getSessionAccessToken();
 
       if (!token) {
         throw new Error("Sign in again to request adjustment.");
@@ -516,7 +516,7 @@ export function InventoryLivePage({ screen }: InventoryLivePageProps) {
     setNotice(null);
 
     try {
-      const token = window.localStorage.getItem(TOKEN_KEY);
+      const token = getSessionAccessToken();
 
       if (!token) {
         throw new Error("Sign in again to approve adjustment.");
@@ -549,7 +549,7 @@ export function InventoryLivePage({ screen }: InventoryLivePageProps) {
     setNotice(null);
 
     try {
-      const token = window.localStorage.getItem(TOKEN_KEY);
+      const token = getSessionAccessToken();
 
       if (!token) {
         throw new Error("Sign in again to reject adjustment.");

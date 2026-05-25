@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+const { randomUUID } = require("crypto");
 const {
   apiDir,
   backupDatabase,
@@ -13,7 +14,6 @@ TRUNCATE TABLE
   "sync_events",
   "sync_batches",
   "report_runs",
-  "audit_logs",
   "adjustment_requests",
   "sales_batch_lines",
   "sales_batches",
@@ -35,6 +35,40 @@ TRUNCATE TABLE
 RESTART IDENTITY CASCADE;
 `;
 
+function sqlString(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function resetAuditSql({ backupPath, databaseName, hostname }) {
+  const after = JSON.stringify({
+    backupPath,
+    databaseName,
+    hostname,
+    preserved: ["audit_logs"],
+    resetBy: process.env.USERNAME || process.env.USER || "unknown",
+    resetAt: new Date().toISOString(),
+    resetType: "demo-data-reset",
+  });
+
+  return `
+INSERT INTO "audit_logs" (
+  "id",
+  "module",
+  "action",
+  "entityType",
+  "after",
+  "createdAt"
+) VALUES (
+  ${sqlString(randomUUID())}::uuid,
+  'admin',
+  'demo-data.reset',
+  'Database',
+  ${sqlString(after)}::jsonb,
+  NOW()
+);
+`;
+}
+
 function usage() {
   console.log(`Usage: npm run api:demo-data:reset -- --yes
 
@@ -43,7 +77,7 @@ Options:
   --dry-run  Validate guards and show planned actions without touching the DB.
 
 This reset preserves users, passwords, roles, permissions, master data,
-sync devices, and system settings. It clears client testing workflows and
+sync devices, system settings, and audit logs. It clears client testing workflows and
 reloads safe baseline seed data without changing seeded account credentials.
 `);
 }
@@ -69,8 +103,8 @@ function main() {
 
   console.log(`Demo-data reset target: ${parsed.hostname}/${databaseName}`);
   console.log(`Backup directory: ${backupRoot}`);
-  console.log("Preserved data: users, credentials, roles, permissions, master data, sync devices, system settings.");
-  console.log("Cleared data: purchasing, receiving, transfers, ledger, counts, wastage, issues, sales, sync batches, reports, audits, menu pricing tests.");
+  console.log("Preserved data: users, credentials, roles, permissions, master data, sync devices, system settings, audit logs.");
+  console.log("Cleared data: purchasing, receiving, transfers, ledger, counts, wastage, issues, sales, sync batches, reports, menu pricing tests.");
 
   if (dryRun) {
     console.log("Dry run passed. No database changes were made.");
@@ -94,8 +128,24 @@ function main() {
   run("node", ["scripts/seed-demo-baseline.js"], {
     cwd: apiDir,
   });
+  run("npx", [
+    "prisma",
+    "db",
+    "execute",
+    "--stdin",
+    "--schema",
+    "prisma/schema.prisma",
+  ], {
+    cwd: apiDir,
+    input: resetAuditSql({
+      backupPath,
+      databaseName,
+      hostname: parsed.hostname,
+    }),
+  });
 
   console.log("Demo data reset complete.");
+  console.log("Audit logs were preserved and a reset audit entry was recorded.");
 }
 
 try {

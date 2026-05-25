@@ -6,7 +6,7 @@ import type { IconName } from "@/lib/icons";
 import type { Screen } from "@/lib/screens";
 import {
   ApiClient,
-  TOKEN_KEY,
+  getSessionAccessToken,
   type AuthenticatedUser,
   type MasterDataImportResult,
   type MasterDataRecord,
@@ -487,7 +487,7 @@ export function MasterDataLivePage({
     let cancelled = false;
 
     async function load() {
-      const token = window.localStorage.getItem(TOKEN_KEY);
+      const token = getSessionAccessToken();
 
       if (!token) {
         setTableError("Sign in again to load master data.");
@@ -571,7 +571,7 @@ export function MasterDataLivePage({
     setFormError(null);
     setTableError(null);
 
-    const token = window.localStorage.getItem(TOKEN_KEY);
+    const token = getSessionAccessToken();
 
     if (!token) {
       setTableError("Sign in again to load master data.");
@@ -624,7 +624,7 @@ export function MasterDataLivePage({
   }
 
   async function downloadTemplate() {
-    const token = window.localStorage.getItem(TOKEN_KEY);
+    const token = getSessionAccessToken();
 
     if (!token) {
       setTableError("Sign in again to download the template.");
@@ -649,7 +649,7 @@ export function MasterDataLivePage({
       return;
     }
 
-    const token = window.localStorage.getItem(TOKEN_KEY);
+    const token = getSessionAccessToken();
 
     if (!token) {
       setTableError("Sign in again to upload the template.");
@@ -799,7 +799,7 @@ export function MasterDataLivePage({
   }
 
   async function mutate(action: "deactivate" | "save") {
-    const token = window.localStorage.getItem(TOKEN_KEY);
+    const token = getSessionAccessToken();
 
     if (!token) {
       setFormError("Sign in again before saving.");
@@ -881,7 +881,7 @@ export function MasterDataLivePage({
       return;
     }
 
-    const token = window.localStorage.getItem(TOKEN_KEY);
+    const token = getSessionAccessToken();
 
     if (!token) {
       setFormError("Sign in again before recording observed yield.");
