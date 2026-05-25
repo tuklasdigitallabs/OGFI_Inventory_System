@@ -104,6 +104,7 @@ export type MasterDataResource =
   | "uoms"
   | "uom-conversions"
   | "suppliers"
+  | "supplier-items"
   | "locations"
   | "categories"
   | "reason-codes"
@@ -134,6 +135,7 @@ export type MasterDataImportResult = {
 
 export type PurchaseOrderLine = {
   id: string;
+  supplierItemId?: string | null;
   itemId: string;
   qty: string;
   uomId: string;
@@ -148,6 +150,7 @@ export type PurchaseOrderLine = {
   costOverrideApprovedById: string | null;
   costOverrideApprovedAt: string | null;
   item?: MasterDataRecord;
+  supplierItem?: MasterDataRecord | null;
   uom?: MasterDataRecord;
 };
 
@@ -233,6 +236,9 @@ export type SupplierItemCost = {
   itemId: string;
   supplierItemId: string | null;
   unitCost: string | null;
+  brand?: string | null;
+  packSize?: string | null;
+  supplierSku?: string | null;
   item?: MasterDataRecord | null;
   supplier?: MasterDataRecord | null;
 };
@@ -679,11 +685,19 @@ export class ApiClient {
     );
   }
 
-  supplierItemCost(supplierId: string, itemId: string) {
+  supplierItemCost(
+    supplierId: string,
+    itemId: string,
+    supplierItemId?: string,
+  ) {
+    const supplierItemQuery = supplierItemId
+      ? `&supplierItemId=${encodeURIComponent(supplierItemId)}`
+      : "";
+
     return this.request<SupplierItemCost>(
       `/purchasing/supplier-item-cost?supplierId=${encodeURIComponent(
         supplierId,
-      )}&itemId=${encodeURIComponent(itemId)}`,
+      )}&itemId=${encodeURIComponent(itemId)}${supplierItemQuery}`,
     );
   }
 

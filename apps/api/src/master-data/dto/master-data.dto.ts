@@ -155,6 +155,80 @@ export class UpdateSupplierDto {
   active?: boolean;
 }
 
+export class CreateSupplierItemDto {
+  @IsUUID()
+  supplierId!: string;
+
+  @IsUUID()
+  itemId!: string;
+
+  @IsOptional()
+  @IsString()
+  brand?: string;
+
+  @IsOptional()
+  @IsString()
+  supplierSku?: string;
+
+  @IsOptional()
+  @IsString()
+  packSize?: string;
+
+  @IsOptional()
+  @IsUUID()
+  purchaseUomId?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @Min(0.000001)
+  conversionToBase?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @Min(0)
+  unitCost?: number;
+}
+
+export class UpdateSupplierItemDto {
+  @IsOptional()
+  @IsUUID()
+  supplierId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  itemId?: string;
+
+  @IsOptional()
+  @IsString()
+  brand?: string | null;
+
+  @IsOptional()
+  @IsString()
+  supplierSku?: string | null;
+
+  @IsOptional()
+  @IsString()
+  packSize?: string | null;
+
+  @IsOptional()
+  @IsUUID()
+  purchaseUomId?: string | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  @Min(0.000001)
+  conversionToBase?: number | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  @Min(0)
+  unitCost?: number | null;
+
+  @IsOptional()
+  @IsBoolean()
+  active?: boolean;
+}
+
 export class CreateReasonCodeDto {
   @IsString()
   code!: string;

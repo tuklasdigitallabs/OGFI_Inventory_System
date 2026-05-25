@@ -262,6 +262,7 @@ model Uom {
   looseRemainderItems Item[]              @relation("ItemLooseRemainderUom")
   conversionsFrom     UomConversion[]     @relation("ConversionFromUom")
   conversionsTo       UomConversion[]     @relation("ConversionToUom")
+  supplierItems       SupplierItem[]      @relation("SupplierItemPurchaseUom")
   purchaseOrderLines  PurchaseOrderLine[]
   recipeLines         RecipeLine[]
   createdAt           DateTime            @default(now())
@@ -352,18 +353,26 @@ model Supplier {
 }
 
 model SupplierItem {
-  id         String   @id @default(uuid()) @db.Uuid
-  supplierId String   @db.Uuid
-  itemId     String   @db.Uuid
-  unitCost   Decimal? @db.Decimal(18, 6)
-  active     Boolean  @default(true)
-  supplier   Supplier @relation(fields: [supplierId], references: [id])
-  item       Item     @relation(fields: [itemId], references: [id])
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id                 String              @id @default(uuid()) @db.Uuid
+  supplierId         String              @db.Uuid
+  itemId             String              @db.Uuid
+  brand              String?
+  supplierSku        String?
+  packSize           String?
+  purchaseUomId      String?             @db.Uuid
+  conversionToBase   Decimal?            @db.Decimal(18, 6)
+  unitCost           Decimal?            @db.Decimal(18, 6)
+  active             Boolean             @default(true)
+  supplier           Supplier            @relation(fields: [supplierId], references: [id])
+  item               Item                @relation(fields: [itemId], references: [id])
+  purchaseUom        Uom?                @relation("SupplierItemPurchaseUom", fields: [purchaseUomId], references: [id])
+  purchaseOrderLines PurchaseOrderLine[]
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
 
-  @@unique([supplierId, itemId])
+  @@unique([supplierId, itemId, supplierSku])
   @@index([itemId])
+  @@index([purchaseUomId])
   @@map("supplier_items")
 }
 
@@ -501,6 +510,7 @@ model PurchaseOrder {
 model PurchaseOrderLine {
   id                       String        @id @default(uuid()) @db.Uuid
   purchaseOrderId          String        @db.Uuid
+  supplierItemId           String?       @db.Uuid
   itemId                   String        @db.Uuid
   qty                      Decimal       @db.Decimal(18, 6)
   uomId                    String        @db.Uuid
@@ -512,11 +522,13 @@ model PurchaseOrderLine {
   costOverrideApprovedById String?       @db.Uuid
   costOverrideApprovedAt   DateTime?
   purchaseOrder            PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  supplierItem             SupplierItem? @relation(fields: [supplierItemId], references: [id])
   item                     Item          @relation(fields: [itemId], references: [id])
   uom                      Uom           @relation(fields: [uomId], references: [id])
   costOverriddenBy         User?         @relation("PurchaseOrderLineCostOverriddenBy", fields: [costOverriddenById], references: [id])
   costOverrideApprovedBy   User?         @relation("PurchaseOrderLineCostOverrideApprovedBy", fields: [costOverrideApprovedById], references: [id])
 
+  @@index([supplierItemId])
   @@index([itemId])
   @@index([costOverriddenById])
   @@index([costOverrideApprovedById])

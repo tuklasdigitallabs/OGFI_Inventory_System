@@ -220,6 +220,65 @@ const configs: ResourceConfig[] = [
       ]),
   },
   {
+    resource: "supplier-items",
+    label: "Supplier Items",
+    icon: "PackageCheck",
+    columns: [
+      "Supplier",
+      "Internal Item",
+      "Brand",
+      "Supplier SKU",
+      "Pack",
+      "Purchase UOM",
+      "Cost",
+      "Status",
+    ],
+    fields: [
+      {
+        key: "supplierId",
+        label: "Supplier",
+        ref: "suppliers",
+        type: "select",
+      },
+      { key: "itemId", label: "Internal item", ref: "items", type: "select" },
+      { key: "brand", label: "Brand", optional: true, type: "text" },
+      {
+        key: "supplierSku",
+        label: "Supplier SKU",
+        optional: true,
+        type: "text",
+      },
+      { key: "packSize", label: "Pack size", optional: true, type: "text" },
+      {
+        key: "purchaseUomId",
+        label: "Purchase UOM",
+        optional: true,
+        ref: "uoms",
+        type: "select",
+      },
+      {
+        key: "conversionToBase",
+        label: "Purchase UOM to base",
+        optional: true,
+        type: "number",
+      },
+      { key: "unitCost", label: "Default unit cost", optional: true, type: "number" },
+    ],
+    toRows: (records) =>
+      records.map((record) => [
+        relatedName(record.supplier),
+        relatedCode(record.item),
+        text(record.brand),
+        text(record.supplierSku),
+        text(record.packSize),
+        relatedCode(record.purchaseUom),
+        record.unitCost === null || record.unitCost === undefined
+          ? "-"
+          : formatCurrency(Number(record.unitCost)),
+        status(record.active),
+      ]),
+  },
+  {
     resource: "locations",
     label: "Locations",
     icon: "MapPin",
@@ -2043,20 +2102,20 @@ function canCreateResource(
   resource: MasterDataResource,
   user: AuthenticatedUser | null,
 ) {
-  return user?.permissions.includes(`master-data.${resource}:create`) ?? false;
+  return user?.permissions.includes(`${permissionPrefix(resource)}:create`) ?? false;
 }
 
 function canImportMasterDataTemplate(user: AuthenticatedUser | null) {
   return configs.every(
     (config) =>
-      user?.permissions.includes(`master-data.${config.resource}:create`) &&
-      user.permissions.includes(`master-data.${config.resource}:update`),
+      user?.permissions.includes(`${permissionPrefix(config.resource)}:create`) &&
+      user.permissions.includes(`${permissionPrefix(config.resource)}:update`),
   );
 }
 
 function canDownloadMasterDataTemplate(user: AuthenticatedUser | null) {
   return configs.every((config) =>
-    user?.permissions.includes(`master-data.${config.resource}:read`),
+    user?.permissions.includes(`${permissionPrefix(config.resource)}:read`),
   );
 }
 
@@ -2064,7 +2123,13 @@ function canReadResource(
   resource: MasterDataResource,
   user: AuthenticatedUser | null,
 ) {
-  return user?.permissions.includes(`master-data.${resource}:read`) ?? false;
+  return user?.permissions.includes(`${permissionPrefix(resource)}:read`) ?? false;
+}
+
+function permissionPrefix(resource: MasterDataResource) {
+  return resource === "supplier-items"
+    ? "master-data.suppliers"
+    : `master-data.${resource}`;
 }
 
 function resourcesNeededFor(

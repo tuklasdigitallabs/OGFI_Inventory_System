@@ -672,19 +672,20 @@ Scope: Excel template download, bulk create/update import, partial success handl
 - Open Master Data.
 - Click Template.
 - Open the downloaded workbook.
-- Confirm it includes the Instructions sheet and sheets for UOMs, Categories, Suppliers, Locations, Reason Codes, Items, UOM Conversions, Recipes, and Recipe Lines.
+- Confirm it includes the Instructions sheet and sheets for UOMs, Categories, Suppliers, Locations, Reason Codes, Items, UOM Conversions, Supplier Items, Recipes, and Recipe Lines.
 - Confirm each data sheet has headers in row 1 and sample data in row 2.
 
 Expected result: the workbook can be used as the single source template for all Master Data imports.
 
 ### 2. Valid Bulk Import
 
-- Fill out valid rows across at least UOMs, Categories, Suppliers, Locations, Items, Recipes, and Recipe Lines.
+- Fill out valid rows across at least UOMs, Categories, Suppliers, Locations, Items, Supplier Items, Recipes, and Recipe Lines.
 - Keep the active column blank on at least one row.
 - Upload the workbook from Master Data.
 - Confirm the import summary shows imported rows with created/updated counts.
 - Refresh the affected Master Data tabs.
 - Confirm imported records are visible and blank active values default to Active.
+- Confirm Supplier Items can distinguish the same internal item by supplier, brand, supplier SKU, pack size, purchase UOM, and default unit cost.
 
 Expected result: valid rows are created or updated without needing one-by-one entry.
 
@@ -703,6 +704,35 @@ Expected result: users can fix rejected rows from the downloadable error workboo
 
 - The import endpoint requires create and update permissions for all Master Data sections because a single workbook can touch every section.
 - The template supports `.xlsx` workbooks only.
+
+## Supplier Item Catalog Selection
+
+Scope: supplier/brand-specific item selection in Purchasing while keeping Inventory tied to the internal item master.
+
+### 1. Supplier Item Master Data
+
+- Open Master Data.
+- Open Supplier Items.
+- Create two catalog rows for the same internal item using different supplier, brand, supplier SKU, pack size, purchase UOM, or default cost.
+- Confirm the table shows supplier, internal item, brand, supplier SKU, pack, purchase UOM, cost, and status.
+
+Expected result: purchasing options are maintained separately from the internal inventory item.
+
+### 2. Purchase Order Item Selection
+
+- Open Purchasing.
+- Select a supplier.
+- Confirm the line-item selector shows only that supplier's catalog items.
+- Select a catalog item and confirm UOM and default cost load from the selected supplier item.
+- Save the PO and expand it in the table.
+- Confirm the line shows the internal item plus brand/supplier SKU details.
+
+Expected result: users choose the intended supplier catalog item before the PO line is saved.
+
+### Known Limitations
+
+- Inventory, receiving, costing, and ledger balances still post to the internal item.
+- Receiving lines display the PO's supplier catalog details, but received stock remains consolidated by internal item.
 
 ## Local Database Reset Script
 

@@ -40,6 +40,7 @@ export class PurchasingController {
     return this.purchasingService.getSupplierItemCost(
       query.supplierId,
       query.itemId,
+      query.supplierItemId,
     );
   }
 

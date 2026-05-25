@@ -146,6 +146,7 @@ If a role does not exist or cannot log in, log that as an admin setup issue.
 - UOMs.
 - UOM conversions.
 - Suppliers.
+- Supplier items.
 - Locations.
 - Categories.
 - Reason codes.
@@ -167,6 +168,9 @@ If a role does not exist or cannot log in, log that as an admin setup issue.
 12. Upload a workbook with one valid row and one invalid row.
 13. Confirm the valid row imports and the failed row appears in the downloadable Error Report.
 14. Correct the Error Report workbook and upload it again.
+15. Create Supplier Item rows for the same internal item with different suppliers or brands.
+16. Open Purchasing, select a supplier, and confirm only that supplier's catalog items appear in the line selector.
+17. Select a catalog item and confirm brand, supplier SKU, pack, UOM, and default cost are clear enough to avoid choosing the wrong item.
 
 ### Expected Result
 
@@ -175,6 +179,7 @@ If a role does not exist or cannot log in, log that as an admin setup issue.
 - Deactivated records should not be used in new transactions where active records are required.
 - Master Data can be bulk-created or bulk-updated from one Excel workbook.
 - Failed import rows can be downloaded, corrected, and resubmitted.
+- Purchasing users select supplier catalog items while inventory remains consolidated under the internal item.
 
 ### Edge Cases
 
@@ -188,6 +193,8 @@ If a role does not exist or cannot log in, log that as an admin setup issue.
 - Blank active value in the import workbook should default to Active.
 - Error report upload should ignore the errorMessages column after correction.
 - Invalid workbook type or missing workbook file.
+- Same internal item offered by different suppliers, brands, packs, or supplier SKUs.
+- Purchase order supplier changed after line items were entered.
 
 ## 5. Recipes
 

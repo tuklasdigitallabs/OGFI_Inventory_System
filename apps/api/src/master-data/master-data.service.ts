@@ -17,6 +17,7 @@ import {
   CreateRecipeDto,
   CreateRecipeYieldObservationDto,
   CreateSupplierDto,
+  CreateSupplierItemDto,
   CreateUomConversionDto,
   CreateUomDto,
   UpdateCategoryDto,
@@ -25,6 +26,7 @@ import {
   UpdateReasonCodeDto,
   UpdateRecipeDto,
   UpdateSupplierDto,
+  UpdateSupplierItemDto,
   UpdateUomConversionDto,
   UpdateUomDto,
 } from "./dto/master-data.dto";
@@ -42,6 +44,7 @@ type MasterDataResource =
   | "locations"
   | "categories"
   | "reason-codes"
+  | "supplier-items"
   | "recipes";
 
 type Tx = Prisma.TransactionClient;
@@ -53,6 +56,7 @@ const resourceConfig: Record<MasterDataResource, { entityType: string }> = {
   "reason-codes": { entityType: "ReasonCode" },
   recipes: { entityType: "Recipe" },
   suppliers: { entityType: "Supplier" },
+  "supplier-items": { entityType: "SupplierItem" },
   uoms: { entityType: "Uom" },
   "uom-conversions": { entityType: "UomConversion" },
 };
@@ -72,6 +76,12 @@ const recipeInclude = {
     take: 5,
   },
 } satisfies Prisma.RecipeInclude;
+
+const supplierItemInclude = {
+  item: { include: { baseUom: true } },
+  purchaseUom: true,
+  supplier: true,
+} satisfies Prisma.SupplierItemInclude;
 
 function relatedSkuOrName(record: Record<string, unknown>) {
   return String(record.sku ?? record.name ?? record.id ?? "Ingredient");
@@ -155,6 +165,26 @@ export class MasterDataService {
               ]),
             },
             orderBy: [{ name: "asc" }],
+            take,
+          }),
+        };
+      case "supplier-items":
+        return {
+          resource,
+          data: await this.prisma.supplierItem.findMany({
+            where: {
+              ...where,
+              itemId: query.itemId,
+              supplierId: query.supplierId,
+              OR: this.search(query.search, ["brand", "supplierSku", "packSize"]),
+            },
+            include: supplierItemInclude,
+            orderBy: [
+              { supplier: { name: "asc" } },
+              { item: { sku: "asc" } },
+              { brand: "asc" },
+              { supplierSku: "asc" },
+            ],
             take,
           }),
         };
@@ -441,6 +471,73 @@ export class MasterDataService {
             dto.phone === undefined ? undefined : this.optionalText(dto.phone),
         },
       }),
+    );
+  }
+
+  async createSupplierItem(
+    dto: CreateSupplierItemDto,
+    user: AuthenticatedUser,
+    metadata: RequestAuditMetadata = {},
+  ) {
+    return this.withCreateAudit("supplier-items", user, metadata, async (tx) => {
+      await this.assertActive(tx, "supplier", dto.supplierId, "Supplier");
+      await this.assertActive(tx, "item", dto.itemId, "Item");
+      if (dto.purchaseUomId) {
+        await this.assertActive(tx, "uom", dto.purchaseUomId, "Purchase UOM");
+      }
+      await this.assertUniqueSupplierItem(tx, dto.supplierId, dto.itemId, dto.supplierSku);
+
+      return tx.supplierItem.create({
+        data: {
+          ...this.supplierItemData(dto),
+          itemId: dto.itemId,
+          supplierId: dto.supplierId,
+        },
+        include: supplierItemInclude,
+      });
+    });
+  }
+
+  async updateSupplierItem(
+    id: string,
+    dto: UpdateSupplierItemDto,
+    user: AuthenticatedUser,
+    metadata: RequestAuditMetadata = {},
+  ) {
+    return this.withUpdateAudit(
+      "supplier-items",
+      id,
+      user,
+      metadata,
+      async (tx, before) => {
+        if (dto.supplierId) {
+          await this.assertActive(tx, "supplier", dto.supplierId, "Supplier");
+        }
+        if (dto.itemId) {
+          await this.assertActive(tx, "item", dto.itemId, "Item");
+        }
+        if (dto.purchaseUomId) {
+          await this.assertActive(tx, "uom", dto.purchaseUomId, "Purchase UOM");
+        }
+        await this.assertUniqueSupplierItem(
+          tx,
+          dto.supplierId ?? String(before.supplierId),
+          dto.itemId ?? String(before.itemId),
+          dto.supplierSku === undefined
+            ? (before.supplierSku as string | null)
+            : dto.supplierSku,
+          id,
+        );
+
+        return tx.supplierItem.update({
+          where: { id },
+          data: {
+            ...this.supplierItemData(dto),
+            active: dto.active,
+          },
+          include: supplierItemInclude,
+        });
+      },
     );
   }
 
@@ -1016,6 +1113,14 @@ export class MasterDataService {
           await tx.supplier.findUnique({ where: { id } }),
           "Supplier",
         );
+      case "supplier-items":
+        return this.requiredRecord(
+          await tx.supplierItem.findUnique({
+            where: { id },
+            include: supplierItemInclude,
+          }),
+          "Supplier item",
+        );
       case "uom-conversions":
         return this.requiredRecord(
           await tx.uomConversion.findUnique({
@@ -1062,6 +1167,12 @@ export class MasterDataService {
         });
       case "suppliers":
         return tx.supplier.update({ where: { id }, data: { active } });
+      case "supplier-items":
+        return tx.supplierItem.update({
+          where: { id },
+          data: { active },
+          include: supplierItemInclude,
+        });
       case "uoms":
         return tx.uom.update({ where: { id }, data: { active } });
     }
@@ -1317,7 +1428,7 @@ export class MasterDataService {
 
   private async assertActive(
     tx: Tx,
-    model: "category" | "item" | "uom",
+    model: "category" | "item" | "supplier" | "uom",
     id: string,
     label: string,
   ) {
@@ -1332,10 +1443,15 @@ export class MasterDataService {
               where: { id, active: true },
               select: { id: true },
             })
-          : await tx.uom.findFirst({
-              where: { id, active: true },
-              select: { id: true },
-            });
+          : model === "supplier"
+            ? await tx.supplier.findFirst({
+                where: { id, active: true },
+                select: { id: true },
+              })
+            : await tx.uom.findFirst({
+                where: { id, active: true },
+                select: { id: true },
+              });
 
     if (!record) {
       throw new BadRequestException(`${label} must exist and be active.`);
@@ -1363,6 +1479,60 @@ export class MasterDataService {
   private optionalText(value?: string) {
     const trimmed = value?.trim();
     return trimmed ? trimmed : null;
+  }
+
+  private supplierItemData(dto: CreateSupplierItemDto | UpdateSupplierItemDto) {
+    return {
+      brand:
+        dto.brand === undefined ? undefined : this.optionalText(dto.brand ?? ""),
+      conversionToBase:
+        dto.conversionToBase === undefined || dto.conversionToBase === null
+          ? dto.conversionToBase
+          : new Prisma.Decimal(dto.conversionToBase),
+      itemId: dto.itemId,
+      packSize:
+        dto.packSize === undefined
+          ? undefined
+          : this.optionalText(dto.packSize ?? ""),
+      purchaseUomId: dto.purchaseUomId,
+      supplierId: dto.supplierId,
+      supplierSku:
+        dto.supplierSku === undefined
+          ? undefined
+          : this.optionalText(dto.supplierSku ?? ""),
+      unitCost:
+        dto.unitCost === undefined || dto.unitCost === null
+          ? dto.unitCost
+          : new Prisma.Decimal(dto.unitCost),
+    };
+  }
+
+  private async assertUniqueSupplierItem(
+    tx: Tx,
+    supplierId?: string,
+    itemId?: string,
+    supplierSku?: string | null,
+    currentId?: string,
+  ) {
+    if (!supplierId || !itemId) {
+      return;
+    }
+
+    const existing = await tx.supplierItem.findFirst({
+      where: {
+        itemId,
+        supplierId,
+        supplierSku: this.optionalText(supplierSku ?? ""),
+        id: currentId ? { not: currentId } : undefined,
+      },
+      select: { id: true },
+    });
+
+    if (existing) {
+      throw new ConflictException(
+        "Supplier item already exists for this supplier, item, and supplier SKU.",
+      );
+    }
   }
 
   private code(value: string, label: string) {

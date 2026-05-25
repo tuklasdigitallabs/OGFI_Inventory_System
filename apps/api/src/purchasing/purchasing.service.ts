@@ -34,6 +34,9 @@ const purchaseOrderInclude = {
   lines: {
     include: {
       item: { include: { baseUom: true } },
+      supplierItem: {
+        include: { item: { include: { baseUom: true } }, purchaseUom: true },
+      },
       uom: true,
       costOverriddenBy: {
         select: { id: true, fullName: true, username: true },
@@ -62,15 +65,25 @@ const receivingInclude = {
 export class PurchasingService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async getSupplierItemCost(supplierId?: string, itemId?: string) {
+  async getSupplierItemCost(
+    supplierId?: string,
+    itemId?: string,
+    supplierItemId?: string,
+  ) {
     if (!supplierId || !itemId) {
       throw new BadRequestException("supplierId and itemId are required.");
     }
 
-    const supplierItem = await this.prisma.supplierItem.findUnique({
-      where: { supplierId_itemId: { supplierId, itemId } },
-      include: { item: { include: { baseUom: true } }, supplier: true },
-    });
+    const supplierItem = supplierItemId
+      ? await this.prisma.supplierItem.findFirst({
+          where: { active: true, id: supplierItemId, itemId, supplierId },
+          include: { item: { include: { baseUom: true } }, supplier: true },
+        })
+      : await this.prisma.supplierItem.findFirst({
+          where: { active: true, itemId, supplierId },
+          include: { item: { include: { baseUom: true } }, supplier: true },
+          orderBy: [{ supplierSku: "asc" }, { createdAt: "asc" }],
+        });
 
     if (!supplierItem?.active || !supplierItem.unitCost) {
       return {
@@ -78,6 +91,9 @@ export class PurchasingService {
         itemId,
         supplierItemId: supplierItem?.id ?? null,
         unitCost: null,
+        brand: supplierItem?.brand ?? null,
+        packSize: supplierItem?.packSize ?? null,
+        supplierSku: supplierItem?.supplierSku ?? null,
         item: supplierItem?.item ?? null,
         supplier: supplierItem?.supplier ?? null,
       };
@@ -88,6 +104,9 @@ export class PurchasingService {
       itemId,
       supplierItemId: supplierItem.id,
       unitCost: supplierItem.unitCost,
+      brand: supplierItem.brand,
+      packSize: supplierItem.packSize,
+      supplierSku: supplierItem.supplierSku,
       item: supplierItem.item,
       supplier: supplierItem.supplier,
     });
@@ -104,11 +123,12 @@ export class PurchasingService {
         include: {
           supplier: true,
           location: true,
-          lines: {
-            include: {
-              item: true,
-              uom: true,
-            },
+              lines: {
+                include: {
+                  item: true,
+                  supplierItem: true,
+                  uom: true,
+                },
           },
           receivings: {
             include: { lines: true },
@@ -570,10 +590,28 @@ export class PurchasingService {
     line: CreatePurchaseOrderDto["lines"][number],
     user: AuthenticatedUser,
   ) {
-    const supplierItem = await tx.supplierItem.findUnique({
-      where: { supplierId_itemId: { supplierId, itemId: line.itemId } },
-      select: { active: true, unitCost: true },
-    });
+    const supplierItem = line.supplierItemId
+      ? await tx.supplierItem.findFirst({
+          where: {
+            active: true,
+            id: line.supplierItemId,
+            itemId: line.itemId,
+            supplierId,
+          },
+          select: { active: true, id: true, unitCost: true },
+        })
+      : await tx.supplierItem.findFirst({
+          where: { active: true, itemId: line.itemId, supplierId },
+          orderBy: [{ supplierSku: "asc" }, { createdAt: "asc" }],
+          select: { active: true, id: true, unitCost: true },
+        });
+
+    if (line.supplierItemId && !supplierItem) {
+      throw new BadRequestException(
+        "Supplier item must belong to the selected supplier and item.",
+      );
+    }
+
     const defaultUnitCost =
       supplierItem?.active && supplierItem.unitCost
         ? supplierItem.unitCost
@@ -600,6 +638,7 @@ export class PurchasingService {
 
     return {
       itemId: line.itemId,
+      supplierItemId: supplierItem?.id,
       qty: new Prisma.Decimal(line.qty),
       uomId: line.uomId,
       unitCost,

@@ -12,6 +12,7 @@ type ImportSheetKey =
   | "Recipe Lines"
   | "Recipes"
   | "Suppliers"
+  | "Supplier Items"
   | "UOM Conversions"
   | "UOMs";
 
@@ -126,6 +127,31 @@ const templateSheets: Array<{
     sample: { factor: "0.001", fromUomCode: "G", toUomCode: "KG" },
   },
   {
+    key: "Supplier Items",
+    headers: [
+      "supplierName",
+      "itemSku",
+      "brand",
+      "supplierSku",
+      "packSize",
+      "purchaseUomCode",
+      "conversionToBase",
+      "unitCost",
+      "active",
+    ],
+    sample: {
+      active: "TRUE",
+      brand: "Magnolia",
+      conversionToBase: "1",
+      itemSku: "CHICKEN-BREAST",
+      packSize: "1 kg pack",
+      purchaseUomCode: "KG",
+      supplierName: "ABC Supplier",
+      supplierSku: "MAG-CB-1KG",
+      unitCost: "180",
+    },
+  },
+  {
     key: "Recipes",
     headers: [
       "outputSku",
@@ -169,6 +195,7 @@ const sheetOrder: ImportSheetKey[] = [
   "Reason Codes",
   "Items",
   "UOM Conversions",
+  "Supplier Items",
   "Recipes",
 ];
 
@@ -200,6 +227,10 @@ export class MasterDataImportService {
       [
         "Recipes",
         "Fill Recipes for the header and Recipe Lines for ingredients. Recipe imports require at least one valid line.",
+      ],
+      [
+        "Supplier Items",
+        "Use Supplier Items for brand, supplier SKU, pack size, purchase UOM, and supplier default cost options.",
       ],
       [
         "Do",
@@ -386,6 +417,8 @@ export class MasterDataImportService {
         return this.importReasonCode(values);
       case "Suppliers":
         return this.importSupplier(values);
+      case "Supplier Items":
+        return this.importSupplierItem(values);
       case "UOM Conversions":
         return this.importUomConversion(values);
       case "UOMs":
@@ -552,6 +585,48 @@ export class MasterDataImportService {
       where: { fromUomId_toUomId: { fromUomId: fromUom.id, toUomId: toUom.id } },
     });
     return existing ? "updated" : "created";
+  }
+
+  private async importSupplierItem(values: Record<string, string>) {
+    const supplier = await this.findSupplier(values.supplierName);
+    const item = await this.findItem(values.itemSku, "itemSku");
+    const supplierSku = this.optional(values.supplierSku);
+    const existing = await this.findSupplierItem(
+      supplier.id,
+      item.id,
+      supplierSku,
+    );
+    const purchaseUom = values.purchaseUomCode.trim()
+      ? await this.findUom(values.purchaseUomCode, "purchaseUomCode")
+      : null;
+    const data = {
+      active: this.boolean(values.active, existing?.active ?? true),
+      brand: this.optional(values.brand),
+      conversionToBase: values.conversionToBase.trim()
+        ? new Prisma.Decimal(
+            this.positiveNumber(values.conversionToBase, "conversionToBase"),
+          )
+        : null,
+      itemId: item.id,
+      packSize: this.optional(values.packSize),
+      purchaseUomId: purchaseUom?.id ?? null,
+      supplierId: supplier.id,
+      supplierSku,
+      unitCost: values.unitCost.trim()
+        ? new Prisma.Decimal(this.nonNegativeNumber(values.unitCost, "unitCost"))
+        : null,
+    };
+
+    if (existing) {
+      await this.prisma.supplierItem.update({
+        data,
+        where: { id: existing.id },
+      });
+      return "updated";
+    }
+
+    await this.prisma.supplierItem.create({ data });
+    return "created";
   }
 
   private async importRecipes(
@@ -763,6 +838,33 @@ export class MasterDataImportService {
       throw new Error(`categoryName ${name} does not exist or is inactive.`);
     }
     return category;
+  }
+
+  private async findSupplier(nameValue: string) {
+    const name = this.required(nameValue, "supplierName");
+    const supplier = await this.prisma.supplier.findFirst({
+      where: { active: true, name: { equals: name, mode: "insensitive" } },
+    });
+    if (!supplier) {
+      throw new Error(`supplierName ${name} does not exist or is inactive.`);
+    }
+    return supplier;
+  }
+
+  private async findSupplierItem(
+    supplierId: string,
+    itemId: string,
+    supplierSku: string | null,
+  ) {
+    if (supplierSku) {
+      return this.prisma.supplierItem.findUnique({
+        where: { supplierId_itemId_supplierSku: { itemId, supplierId, supplierSku } },
+      });
+    }
+
+    return this.prisma.supplierItem.findFirst({
+      where: { itemId, supplierId, supplierSku: null },
+    });
   }
 
   private async findItem(skuValue: string, label: string) {

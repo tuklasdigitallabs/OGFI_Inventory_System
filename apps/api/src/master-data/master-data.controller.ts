@@ -24,6 +24,7 @@ import {
   CreateRecipeDto,
   CreateRecipeYieldObservationDto,
   CreateSupplierDto,
+  CreateSupplierItemDto,
   CreateUomConversionDto,
   CreateUomDto,
   UpdateCategoryDto,
@@ -32,6 +33,7 @@ import {
   UpdateReasonCodeDto,
   UpdateRecipeDto,
   UpdateSupplierDto,
+  UpdateSupplierItemDto,
   UpdateUomConversionDto,
   UpdateUomDto,
 } from "./dto/master-data.dto";
@@ -318,6 +320,57 @@ export class MasterDataController {
   ) {
     return this.masterDataService.deactivate(
       "suppliers",
+      id,
+      user,
+      this.auditMetadata(request),
+    );
+  }
+
+  @Get("supplier-items")
+  @Permissions("master-data.suppliers:read")
+  listSupplierItems(@Query() query: Record<string, string>) {
+    return this.masterDataService.list("supplier-items", query);
+  }
+
+  @Post("supplier-items")
+  @Permissions("master-data.suppliers:create")
+  createSupplierItem(
+    @Body() body: CreateSupplierItemDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: Request,
+  ) {
+    return this.masterDataService.createSupplierItem(
+      body,
+      user,
+      this.auditMetadata(request),
+    );
+  }
+
+  @Patch("supplier-items/:id")
+  @Permissions("master-data.suppliers:update")
+  updateSupplierItem(
+    @Param("id") id: string,
+    @Body() body: UpdateSupplierItemDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: Request,
+  ) {
+    return this.masterDataService.updateSupplierItem(
+      id,
+      body,
+      user,
+      this.auditMetadata(request),
+    );
+  }
+
+  @Post("supplier-items/:id/deactivate")
+  @Permissions("master-data.suppliers:deactivate")
+  deactivateSupplierItem(
+    @Param("id") id: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: Request,
+  ) {
+    return this.masterDataService.deactivate(
+      "supplier-items",
       id,
       user,
       this.auditMetadata(request),

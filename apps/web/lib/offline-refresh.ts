@@ -10,6 +10,7 @@ const masterResources: MasterDataResource[] = [
   "uoms",
   "uom-conversions",
   "suppliers",
+  "supplier-items",
   "locations",
   "categories",
   "reason-codes",

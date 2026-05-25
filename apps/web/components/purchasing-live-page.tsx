@@ -29,6 +29,7 @@ type PurchasingLivePageProps = {
 type ResourceState = {
   items: MasterDataRecord[];
   locations: MasterDataRecord[];
+  supplierItems: MasterDataRecord[];
   suppliers: MasterDataRecord[];
   uoms: MasterDataRecord[];
 };
@@ -40,6 +41,7 @@ type PurchaseOrderLineForm = {
   itemId: string;
   lineId: string;
   qty: string;
+  supplierItemId: string;
   unitCost: string;
   uomId: string;
 };
@@ -82,6 +84,7 @@ type PurchaseOrderFilters = {
 const emptyResources: ResourceState = {
   items: [],
   locations: [],
+  supplierItems: [],
   suppliers: [],
   uoms: [],
 };
@@ -97,6 +100,7 @@ function createPurchaseOrderLineForm(
     itemId,
     lineId: `po-line-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     qty: "1",
+    supplierItemId: "",
     unitCost: "",
     uomId,
   };
@@ -206,10 +210,11 @@ export function PurchasingLivePage({ screen }: PurchasingLivePageProps) {
 
       try {
         const client = new ApiClient(token);
-        const [user, suppliers, locations, items, uoms, purchaseOrders] =
+        const [user, suppliers, supplierItems, locations, items, uoms, purchaseOrders] =
           await Promise.all([
             client.currentUser(),
             client.masterData<MasterDataRecord>("suppliers"),
+            client.masterData<MasterDataRecord>("supplier-items"),
             client.masterData<MasterDataRecord>("locations"),
             client.masterData<MasterDataRecord>("items"),
             client.masterData<MasterDataRecord>("uoms"),
@@ -235,6 +240,9 @@ export function PurchasingLivePage({ screen }: PurchasingLivePageProps) {
         setResources({
           items: activeItems,
           locations: allowedLocations,
+          supplierItems: supplierItems.data.filter(
+            (supplierItem) => supplierItem.active !== false,
+          ),
           suppliers: activeSuppliers,
           uoms: activeUoms,
         });
@@ -307,6 +315,7 @@ export function PurchasingLivePage({ screen }: PurchasingLivePageProps) {
         const supplierCost = await client.supplierItemCost(
           poForm.supplierId,
           line.itemId,
+          line.supplierItemId || undefined,
         );
 
         if (cancelled) {
@@ -427,6 +436,7 @@ export function PurchasingLivePage({ screen }: PurchasingLivePageProps) {
         remarks: poForm.remarks || undefined,
         lines: poForm.lines.map((line) => ({
           itemId: line.itemId,
+          supplierItemId: line.supplierItemId || undefined,
           qty: Number(line.qty),
           uomId: line.uomId,
           unitCost: Number(line.unitCost),
@@ -554,6 +564,12 @@ export function PurchasingLivePage({ screen }: PurchasingLivePageProps) {
             const selectedItem = resources.items.find(
               (item) => item.id === line.itemId,
             );
+            const supplierItem = resources.supplierItems.find(
+              (record) =>
+                record.id === line.supplierItemId ||
+                (record.supplierId === detail.supplierId &&
+                  record.itemId === line.itemId),
+            );
 
             return {
               costLoaded: true,
@@ -562,6 +578,8 @@ export function PurchasingLivePage({ screen }: PurchasingLivePageProps) {
               itemId: line.itemId,
               lineId: line.id,
               qty: line.qty,
+              supplierItemId:
+                typeof supplierItem?.id === "string" ? supplierItem.id : "",
               unitCost: line.unitCost,
               uomId:
                 line.uomId ||
@@ -755,6 +773,9 @@ function PurchaseOrderForm({
   submit,
 }: PurchaseOrderFormProps) {
   const [lineError, setLineError] = useState<string | null>(null);
+  const supplierCatalog = resources.supplierItems.filter(
+    (supplierItem) => supplierItem.supplierId === form.supplierId,
+  );
 
   function updateCurrentLine(changes: Partial<PurchaseOrderLineForm>) {
     setForm({
@@ -824,13 +845,15 @@ function PurchaseOrderForm({
                 setForm({
                   ...form,
                   currentLine: {
-                    ...form.currentLine,
+                    ...createPurchaseOrderLineForm(),
                     costLoaded: false,
                     costOverrideReason: "",
                     defaultUnitCost: "",
+                    supplierItemId: "",
                     unitCost: "",
                   },
                   editingLineId: "",
+                  lines: [],
                   supplierId,
                 })
               }
@@ -852,22 +875,38 @@ function PurchaseOrderForm({
           </div>
           <div className="grid gap-4 md:grid-cols-3">
             <SearchableSelectField
-              label="Item"
-              value={form.currentLine.itemId}
-              options={resources.items}
-              optionLabel={(record) => text(record.sku)}
-              onChange={(itemId) => {
-                const selectedItem = resources.items.find(
-                  (item) => item.id === itemId,
+              label="Supplier Catalog Item"
+              value={form.currentLine.supplierItemId}
+              options={supplierCatalog}
+              optionLabel={supplierItemLabel}
+              onChange={(supplierItemId) => {
+                const supplierItem = supplierCatalog.find(
+                  (record) => record.id === supplierItemId,
                 );
+                const selectedItem = resources.items.find(
+                  (item) => item.id === supplierItem?.itemId,
+                );
+                const purchaseUomId =
+                  typeof supplierItem?.purchaseUomId === "string"
+                    ? supplierItem.purchaseUomId
+                    : "";
+                const unitCost =
+                  supplierItem?.unitCost === null ||
+                  supplierItem?.unitCost === undefined
+                    ? ""
+                    : String(supplierItem.unitCost);
 
                 updateCurrentLine({
                   costLoaded: false,
                   costOverrideReason: "",
                   defaultUnitCost: "",
-                  itemId,
-                  unitCost: "",
-                  uomId: itemBaseUomId(selectedItem) || "",
+                  itemId:
+                    typeof supplierItem?.itemId === "string"
+                      ? supplierItem.itemId
+                      : "",
+                  supplierItemId,
+                  unitCost,
+                  uomId: purchaseUomId || itemBaseUomId(selectedItem) || "",
                 });
               }}
             />
@@ -1014,7 +1053,7 @@ function DraftLineItemsTable({
       <table className="w-full border-collapse text-left text-sm">
         <thead>
           <tr>
-            {["Item", "Qty", "UOM", "Unit Cost", "Total", "Default", ""].map(
+            {["Catalog Item", "Qty", "UOM", "Unit Cost", "Total", "Default", ""].map(
               (column) => (
                 <th
                   className="px-3 py-2 text-xs font-bold text-og-gray"
@@ -1031,6 +1070,9 @@ function DraftLineItemsTable({
             const item = resources.items.find(
               (record) => record.id === line.itemId,
             );
+            const supplierItem = resources.supplierItems.find(
+              (record) => record.id === line.supplierItemId,
+            );
             const uom = resources.uoms.find(
               (record) => record.id === line.uomId,
             );
@@ -1042,7 +1084,7 @@ function DraftLineItemsTable({
                 onClick={() => editLine(line)}
               >
                 <td className="px-3 py-2 font-semibold text-og-dark">
-                  {text(item?.sku)}
+                  {supplierItem ? supplierItemLabel(supplierItem) : text(item?.sku)}
                 </td>
                 <td className="px-3 py-2 text-og-dark">{decimal(line.qty)}</td>
                 <td className="px-3 py-2 text-og-dark">{text(uom?.code)}</td>
@@ -1569,6 +1611,7 @@ function LineItemsTable({ lines }: { lines: PurchaseOrderLine[] }) {
           <tr>
             {[
               "Item",
+              "Brand / Supplier SKU",
               "Ordered",
               "Received",
               "Rejected",
@@ -1593,6 +1636,9 @@ function LineItemsTable({ lines }: { lines: PurchaseOrderLine[] }) {
             <tr className="border-t border-og-line" key={line.id}>
               <td className="px-2 py-2 font-semibold text-og-dark">
                 {text(line.item?.sku)}
+              </td>
+              <td className="px-2 py-2 text-og-dark">
+                {line.supplierItem ? supplierItemShortLabel(line.supplierItem) : "-"}
               </td>
               <td className="px-2 py-2 text-og-dark">{decimal(line.qty)}</td>
               <td className="px-2 py-2 text-og-dark">
@@ -1874,8 +1920,8 @@ function validatePurchaseOrderForm(form: PurchaseOrderForm) {
   for (const [index, line] of form.lines.entries()) {
     const lineNumber = index + 1;
 
-    if (!line.itemId || !line.uomId) {
-      return `Select an item and UOM for line ${lineNumber}.`;
+    if (!line.supplierItemId || !line.itemId || !line.uomId) {
+      return `Select a supplier catalog item and UOM for line ${lineNumber}.`;
     }
 
     if (!isPositiveNumber(line.qty)) {
@@ -1899,8 +1945,8 @@ function validatePurchaseOrderForm(form: PurchaseOrderForm) {
 }
 
 function validatePurchaseOrderLine(line: PurchaseOrderLineForm) {
-  if (!line.itemId || !line.uomId) {
-    return "Select an item and UOM before adding the line.";
+  if (!line.supplierItemId || !line.itemId || !line.uomId) {
+    return "Select a supplier catalog item and UOM before adding the line.";
   }
 
   if (!isPositiveNumber(line.qty)) {
@@ -2082,6 +2128,32 @@ function decimal(value: unknown) {
 
 function normalizeReference(value: unknown) {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function supplierItemLabel(record: MasterDataRecord) {
+  const item = isRecord(record.item) ? record.item : null;
+  const parts = [
+    text(item?.sku),
+    text(item?.name),
+    text(record.brand),
+    text(record.supplierSku),
+    text(record.packSize),
+    record.unitCost === null || record.unitCost === undefined
+      ? ""
+      : formatCurrency(Number(record.unitCost)),
+  ].filter((part) => part && part !== "-");
+
+  return parts.join(" | ");
+}
+
+function supplierItemShortLabel(record: MasterDataRecord) {
+  const parts = [
+    text(record.brand),
+    text(record.supplierSku),
+    text(record.packSize),
+  ].filter((part) => part && part !== "-");
+
+  return parts.length > 0 ? parts.join(" | ") : "-";
 }
 
 function itemBaseUomId(item: MasterDataRecord | undefined) {

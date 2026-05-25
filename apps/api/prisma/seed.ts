@@ -929,14 +929,20 @@ async function seedSuppliers() {
       where: { name: supplierName },
     });
     const item = await prisma.item.findUniqueOrThrow({ where: { sku } });
-
-    await prisma.supplierItem.upsert({
-      where: {
-        supplierId_itemId: { supplierId: supplier.id, itemId: item.id },
-      },
-      update: { active: true, unitCost },
-      create: { supplierId: supplier.id, itemId: item.id, unitCost },
+    const existing = await prisma.supplierItem.findFirst({
+      where: { itemId: item.id, supplierId: supplier.id, supplierSku: null },
     });
+
+    if (existing) {
+      await prisma.supplierItem.update({
+        where: { id: existing.id },
+        data: { active: true, unitCost },
+      });
+    } else {
+      await prisma.supplierItem.create({
+        data: { supplierId: supplier.id, itemId: item.id, unitCost },
+      });
+    }
   }
 }
 
