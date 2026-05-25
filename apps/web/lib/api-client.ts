@@ -133,6 +133,16 @@ export type MasterDataImportResult = {
   updated: number;
 };
 
+export type OpeningInventoryImportResult = {
+  errorReportBase64: string | null;
+  errorReportFilename: string | null;
+  errors: MasterDataImportError[];
+  failed: number;
+  imported: number;
+  posted: boolean;
+  stockCountNumber: string | null;
+};
+
 export type PurchaseOrderLine = {
   id: string;
   supplierItemId?: string | null;
@@ -252,6 +262,8 @@ export type BranchOperationLine = {
   varianceQty?: string | null;
   qtySold?: string;
   unitCost?: string | null;
+  brand?: string | null;
+  uom?: MasterDataRecord;
   item?: MasterDataRecord;
 };
 
@@ -261,10 +273,14 @@ export type BranchOperationRecord = {
   countNumber?: string;
   issueNumber?: string;
   batchNumber?: string;
+  purchaseNumber?: string;
   locationId: string;
   countType?: string;
   status?: string;
   businessDate: string;
+  sourceName?: string;
+  receiptReference?: string | null;
+  reason?: string | null;
   remarks?: string | null;
   reasonCode?: MasterDataRecord;
   location?: MasterDataRecord;
@@ -584,6 +600,25 @@ export class ApiClient {
     });
   }
 
+  importOpeningInventory(payload: {
+    businessDate: string;
+    file: File;
+    locationId: string;
+  }) {
+    const formData = new FormData();
+    formData.append("businessDate", payload.businessDate);
+    formData.append("locationId", payload.locationId);
+    formData.append("file", payload.file);
+
+    return this.request<OpeningInventoryImportResult>(
+      "/inventory/opening-inventory/import",
+      {
+        body: formData,
+        method: "POST",
+      },
+    );
+  }
+
   createMasterData<T extends MasterDataRecord>(
     resource: MasterDataResource,
     payload: Record<string, unknown>,
@@ -849,6 +884,20 @@ export class ApiClient {
 
   createBranchIssue(payload: Record<string, unknown>) {
     return this.request<BranchOperationRecord>("/branch/issues", {
+      body: JSON.stringify(payload),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    });
+  }
+
+  branchEmergencyPurchases(locationId: string) {
+    return this.request<ApiListResponse<BranchOperationRecord>>(
+      `/branch/emergency-purchases?locationId=${encodeURIComponent(locationId)}&take=25`,
+    );
+  }
+
+  createBranchEmergencyPurchase(payload: Record<string, unknown>) {
+    return this.request<BranchOperationRecord>("/branch/emergency-purchases", {
       body: JSON.stringify(payload),
       headers: { "Content-Type": "application/json" },
       method: "POST",

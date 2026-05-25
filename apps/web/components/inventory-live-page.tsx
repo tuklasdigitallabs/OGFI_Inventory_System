@@ -13,6 +13,7 @@ import {
   type AuthenticatedUser,
   type LedgerMovementRow,
   type MasterDataRecord,
+  type OpeningInventoryImportResult,
   type StockOnHandRow,
 } from "@/lib/api-client";
 
@@ -26,6 +27,7 @@ type InventoryState = {
   currentUser: AuthenticatedUser | null;
   error: string | null;
   loading: boolean;
+  locations: MasterDataRecord[];
   movements: LedgerMovementRow[];
   stock: StockOnHandRow[];
 };
@@ -67,6 +69,7 @@ const initialState: InventoryState = {
   currentUser: null,
   error: null,
   loading: true,
+  locations: [],
   movements: [],
   stock: [],
 };
@@ -112,12 +115,21 @@ export function InventoryLivePage({ screen }: InventoryLivePageProps) {
   const [movementPage, setMovementPage] = useState(1);
   const [notice, setNotice] = useState<string | null>(null);
   const [savingAdjustment, setSavingAdjustment] = useState(false);
+  const [openingImporting, setOpeningImporting] = useState(false);
+  const [openingImportResult, setOpeningImportResult] =
+    useState<OpeningInventoryImportResult | null>(null);
+  const [openingImportForm, setOpeningImportForm] = useState({
+    businessDate: new Date().toISOString().slice(0, 10),
+    locationId: "",
+  });
   const [showAdjustmentForm, setShowAdjustmentForm] = useState(false);
+  const [showOpeningImport, setShowOpeningImport] = useState(false);
   const [showFilters, setShowFilters] = useState(true);
   const [stockPage, setStockPage] = useState(1);
   const [adjustmentForm, setAdjustmentForm] =
     useState<AdjustmentForm>(emptyAdjustmentForm);
   const movementSearchInputRef = useRef<HTMLInputElement>(null);
+  const openingImportFileRef = useRef<HTMLInputElement>(null);
   const stockSearchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -149,6 +161,7 @@ export function InventoryLivePage({ screen }: InventoryLivePageProps) {
           currentUser: null,
           error: "Sign in again to load inventory data.",
           loading: false,
+          locations: [],
           movements: [],
           stock: [],
         });
@@ -166,6 +179,7 @@ export function InventoryLivePage({ screen }: InventoryLivePageProps) {
             currentUser: user,
             error: null,
             loading: false,
+            locations: [],
             movements: [],
             stock: [],
           });
@@ -180,6 +194,7 @@ export function InventoryLivePage({ screen }: InventoryLivePageProps) {
           movementResponses,
           adjustmentResponses,
           reasonResponse,
+          locationResponse,
         ] =
           await Promise.all([
             Promise.all(
@@ -200,11 +215,17 @@ export function InventoryLivePage({ screen }: InventoryLivePageProps) {
                 )
               : Promise.resolve([]),
             client.masterData<MasterDataRecord>("reason-codes"),
+            client.masterData<MasterDataRecord>("locations"),
           ]);
 
         if (cancelled) {
           return;
         }
+
+        const accessibleLocations = locationResponse.data.filter(
+          (location) =>
+            location.active !== false && user.locationIds.includes(location.id),
+        );
 
         setState({
           adjustmentRequests: adjustmentResponses.flatMap(
@@ -217,9 +238,14 @@ export function InventoryLivePage({ screen }: InventoryLivePageProps) {
           currentUser: user,
           error: null,
           loading: false,
+          locations: accessibleLocations,
           movements: movementResponses.flatMap((response) => response.data),
           stock: stockResponses.flatMap((response) => response.data),
         });
+        setOpeningImportForm((current) => ({
+          ...current,
+          locationId: current.locationId || accessibleLocations[0]?.id || "",
+        }));
       } catch (error) {
         if (cancelled) {
           return;
@@ -234,6 +260,7 @@ export function InventoryLivePage({ screen }: InventoryLivePageProps) {
               ? error.message
               : "Unable to load inventory data.",
           loading: false,
+          locations: [],
           movements: [],
           stock: [],
         });
@@ -353,6 +380,72 @@ export function InventoryLivePage({ screen }: InventoryLivePageProps) {
       movements: movementResponses.flatMap((response) => response.data),
       stock: stockResponses.flatMap((response) => response.data),
     }));
+  }
+
+  async function submitOpeningImport(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setOpeningImporting(true);
+    setOpeningImportResult(null);
+    setNotice(null);
+
+    try {
+      const file = openingImportFileRef.current?.files?.[0];
+
+      if (!file) {
+        throw new Error("Select an opening inventory workbook.");
+      }
+
+      if (!openingImportForm.locationId) {
+        throw new Error("Select the branch/store for this opening inventory.");
+      }
+
+      const token = window.localStorage.getItem(TOKEN_KEY);
+
+      if (!token) {
+        throw new Error("Sign in again to upload opening inventory.");
+      }
+
+      const result = await new ApiClient(token).importOpeningInventory({
+        businessDate: openingImportForm.businessDate,
+        file,
+        locationId: openingImportForm.locationId,
+      });
+
+      setOpeningImportResult(result);
+
+      if (result.posted) {
+        await refreshInventory();
+        setShowOpeningImport(false);
+        setNotice(
+          `Opening inventory posted: ${result.imported} rows, ${result.stockCountNumber}.`,
+        );
+      }
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unable to upload opening inventory.",
+      }));
+    } finally {
+      setOpeningImporting(false);
+      if (openingImportFileRef.current) {
+        openingImportFileRef.current.value = "";
+      }
+    }
+  }
+
+  function downloadOpeningImportErrorReport() {
+    if (!openingImportResult?.errorReportBase64) {
+      return;
+    }
+
+    downloadBase64File(
+      openingImportResult.errorReportBase64,
+      openingImportResult.errorReportFilename ??
+        "OGFI_Opening_Inventory_Errors.xlsx",
+    );
   }
 
   async function submitAdjustment(event: FormEvent<HTMLFormElement>) {
@@ -482,6 +575,8 @@ export function InventoryLivePage({ screen }: InventoryLivePageProps) {
   const canCreateAdjustments =
     state.currentUser?.permissions.includes("inventory.adjustments:create") ??
     false;
+  const canPostOpeningInventory =
+    state.currentUser?.permissions.includes("ledger.events:post") ?? false;
   const canReadAdjustments =
     state.currentUser?.permissions.includes("inventory.adjustments:read") ??
     false;
@@ -543,6 +638,20 @@ export function InventoryLivePage({ screen }: InventoryLivePageProps) {
               Adjustment Request
             </button>
           ) : null}
+          {canPostOpeningInventory ? (
+            <button
+              className="inline-flex h-9 items-center gap-2 rounded-md border border-og-line bg-white px-3 text-sm font-semibold text-og-dark transition hover:border-og-green hover:text-og-green"
+              disabled={state.loading}
+              type="button"
+              onClick={() => {
+                setShowOpeningImport((current) => !current);
+                setOpeningImportResult(null);
+              }}
+            >
+              <Icon name="FileSpreadsheet" size={18} />
+              Opening Inventory
+            </button>
+          ) : null}
         </div>
       </section>
 
@@ -568,6 +677,20 @@ export function InventoryLivePage({ screen }: InventoryLivePageProps) {
           onCancel={() => setShowAdjustmentForm(false)}
           onChange={setAdjustmentForm}
           onSubmit={submitAdjustment}
+        />
+      ) : null}
+
+      {showOpeningImport ? (
+        <OpeningInventoryImportPanel
+          disabled={openingImporting}
+          fileInputRef={openingImportFileRef}
+          form={openingImportForm}
+          locations={state.locations}
+          result={openingImportResult}
+          onCancel={() => setShowOpeningImport(false)}
+          onChange={setOpeningImportForm}
+          onDownloadErrorReport={downloadOpeningImportErrorReport}
+          onSubmit={submitOpeningImport}
         />
       ) : null}
 
@@ -1275,6 +1398,151 @@ function InventoryTabs({
   );
 }
 
+function OpeningInventoryImportPanel({
+  disabled,
+  fileInputRef,
+  form,
+  locations,
+  result,
+  onCancel,
+  onChange,
+  onDownloadErrorReport,
+  onSubmit,
+}: {
+  disabled: boolean;
+  fileInputRef: RefObject<HTMLInputElement | null>;
+  form: { businessDate: string; locationId: string };
+  locations: MasterDataRecord[];
+  result: OpeningInventoryImportResult | null;
+  onCancel: () => void;
+  onChange: (form: { businessDate: string; locationId: string }) => void;
+  onDownloadErrorReport: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  return (
+    <section className="og-card">
+      <form className="flex flex-col gap-4" onSubmit={onSubmit}>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="font-poppins text-lg font-semibold text-og-dark">
+              Opening Inventory Upload
+            </h2>
+            <p className="text-sm text-og-gray">
+              Upload the client month-end count sheet as the branch beginning
+              inventory.
+            </p>
+          </div>
+          <button
+            className="inline-flex h-9 items-center gap-2 rounded-md border border-og-line bg-white px-3 text-sm font-semibold text-og-dark hover:border-og-green hover:text-og-green disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={disabled}
+            type="button"
+            onClick={onCancel}
+          >
+            <Icon name="X" size={16} />
+            Close
+          </button>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-[minmax(220px,1fr)_170px_minmax(220px,1fr)]">
+          <label>
+            <span className="mb-1 block text-xs font-semibold text-og-gray">
+              Branch / Store
+            </span>
+            <select
+              className="h-10 w-full rounded-md border border-og-line bg-white px-3 text-sm focus:border-og-green"
+              disabled={disabled}
+              required
+              value={form.locationId}
+              onChange={(event) =>
+                onChange({ ...form, locationId: event.target.value })
+              }
+            >
+              <option value="">Select branch/store</option>
+              {locations.map((location) => (
+                <option key={String(location.id)} value={String(location.id)}>
+                  {String(location.code ?? location.name)} -{" "}
+                  {String(location.name ?? "")}
+                </option>
+              ))}
+            </select>
+          </label>
+          <DateInput
+            disabled={disabled}
+            label="Business date"
+            value={form.businessDate}
+            onChange={(businessDate) => onChange({ ...form, businessDate })}
+          />
+          <label>
+            <span className="mb-1 block text-xs font-semibold text-og-gray">
+              Excel file
+            </span>
+            <input
+              ref={fileInputRef}
+              accept=".xlsx"
+              className="block h-10 w-full rounded-md border border-og-line bg-white px-3 py-2 text-sm focus:border-og-green"
+              disabled={disabled}
+              required
+              type="file"
+            />
+          </label>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <button
+            className="inline-flex h-10 items-center gap-2 rounded-md bg-og-green px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={disabled}
+            type="submit"
+          >
+            <Icon name="Upload" size={18} />
+            {disabled ? "Uploading" : "Upload Opening Inventory"}
+          </button>
+        </div>
+      </form>
+
+      {result ? (
+        <div className="mt-4 rounded-md border border-og-line bg-og-surface p-3">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-og-dark">
+                {result.posted
+                  ? `Posted ${result.imported} rows to ${result.stockCountNumber}.`
+                  : `Import check finished: ${result.imported} imported, ${result.failed} failed.`}
+              </p>
+              {result.failed > 0 ? (
+                <p className="mt-1 text-sm text-og-gray">
+                  Fix the downloadable error workbook, then upload it again.
+                </p>
+              ) : null}
+            </div>
+            {result.errorReportBase64 ? (
+              <button
+                className="inline-flex h-10 items-center gap-2 rounded-md border border-og-line bg-white px-3 text-sm font-semibold text-og-dark transition hover:border-og-green"
+                onClick={onDownloadErrorReport}
+                type="button"
+              >
+                <Icon name="FileSpreadsheet" size={16} />
+                Error Report
+              </button>
+            ) : null}
+          </div>
+          {result.errors.length > 0 ? (
+            <ul className="mt-3 space-y-2 text-sm text-og-gray">
+              {result.errors.slice(0, 3).map((error) => (
+                <li key={`${error.sheet}-${error.row}`}>
+                  <span className="font-semibold text-og-dark">
+                    {error.sheet} row {error.row}:
+                  </span>{" "}
+                  {error.errors.join(", ")}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function PagedDataTable({
   columns,
   emptyMessage,
@@ -1759,6 +2027,28 @@ function uniqueOptions(options: Array<{ label: string; value: string }>) {
   return [...optionMap.entries()]
     .map(([value, label]) => ({ label, value }))
     .sort((left, right) => left.label.localeCompare(right.label));
+}
+
+function downloadBase64File(base64: string, filename: string) {
+  const binary = window.atob(base64);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  const blob = new Blob([bytes], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
 }
 
 function formatItemType(value: string) {

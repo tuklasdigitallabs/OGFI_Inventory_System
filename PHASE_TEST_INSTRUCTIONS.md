@@ -114,9 +114,49 @@ Admin Settings passes when admins can create, update, and deactivate users, main
 
 ---
 
+## Opening Inventory Upload
+
+Scope: Client month-end inventory workbook upload for branch/store beginning inventory.
+
+### 1. Client Count Sheet Upload
+
+- Open Inventory as an admin or warehouse manager with ledger posting access.
+- Click Opening Inventory.
+- Select a pilot branch/store with no existing inventory movements.
+- Set the business date to the client's beginning inventory date.
+- Upload the client month-end count workbook.
+- Confirm rows with blank COUNT and blank LOOSE are ignored.
+- Confirm rows with valid items, UOMs, and pack sizes post as one Opening stock count.
+- Confirm Inventory stock on hand increases for the selected branch/store.
+- Confirm Inventory Movements show `STOCK_COUNT` entries with reference type `COUNT`.
+- For `500GM/PACK`, count UOM `G`, `COUNT = 2`, and `LOOSE = 350`, confirm the system posts `1.35 KG` when the item base UOM is KG.
+- For `25KG/SACK`, count UOM `KG`, `COUNT = 2`, and `LOOSE = 5`, confirm the system posts `55 KG`.
+
+Expected result: The client's month-end count sheet can become the selected branch/store's beginning inventory.
+
+### 2. Validation and Error Report
+
+- Upload a workbook with an unknown item, unknown UOM, missing UOM conversion, or duplicate item.
+- Confirm the upload does not post.
+- Download the error workbook.
+- Confirm the error workbook includes original sheet, row, category, item, purchase UOM, UOM, COUNT, LOOSE, unit cost, and error messages.
+- Fix the error workbook and upload it again.
+
+Expected result: Invalid opening inventory rows are rejected with a downloadable workbook that can be corrected and resubmitted.
+
+### 3. Duplicate Opening Guard
+
+- Upload opening inventory successfully for one branch/store.
+- Try uploading opening inventory again for the same branch/store after ledger movements exist.
+- Confirm the second upload is blocked.
+
+Expected result: A branch/store cannot accidentally post beginning inventory twice after inventory movement has started.
+
+---
+
 ## Phase 9 - Store Operations
 
-Scope: Branch/store inventory operations, including branch stock visibility, incoming transfer receiving, wastage, stock count, issue to ops, and sales batch posting.
+Scope: Branch/store inventory operations, including branch stock visibility, incoming transfer receiving, wastage, stock count, issue to ops, emergency purchases, and sales batch posting.
 
 ### 1. Branch Selector
 
@@ -234,7 +274,30 @@ Loose item expected result: Full units plus loose count are converted to the ite
 
 Expected result: Issue to Ops records operational stock consumption without allowing invalid quantities or missing conversions.
 
-### 7. Sales Batch
+### 7. Emergency Purchase
+
+- Select a branch/store.
+- Open the Emergency Purchase tab.
+- Select an active item.
+- Confirm UOM defaults to the item base UOM.
+- Enter purchased quantity, unit cost, source/store, optional brand, receipt reference, reason, and remarks.
+- Post Emergency Purchase.
+- Confirm branch stock increases.
+- Confirm inventory average cost updates from the emergency purchase unit cost.
+- Confirm emergency purchase history appears.
+- Expand the emergency purchase history line count.
+- Confirm line details show item, quantity, UOM, unit cost, and optional brand.
+- Change UOM to a non-base UOM with a valid conversion.
+- Enter the cost per selected UOM and post.
+- Confirm ledger unit cost is converted to base UOM cost.
+- Change UOM to a non-base UOM without a conversion.
+- Confirm posting is blocked with a clear error.
+- Disconnect network and try posting.
+- Confirm posting is blocked because emergency purchases are online-only.
+
+Expected result: Emergency Purchase lets branch staff record emergency/local buys, increases stock through a posted `RECEIVE` ledger movement, keeps source/brand/receipt audit details, and validates UOM conversion.
+
+### 8. Sales Batch
 
 - Confirm the Item dropdown only lists finished goods.
 - Select a finished item or menu item with an active recipe.
@@ -251,7 +314,7 @@ Expected result: Issue to Ops records operational stock consumption without allo
 
 Expected result: Sales Batch consumes recipe ingredients from branch inventory through ledger events.
 
-### 8. Permissions
+### 9. Permissions
 
 - Log in as a branch user.
 - Confirm only allowed branch/store locations appear in the selector.
@@ -263,7 +326,7 @@ Expected result: Sales Batch consumes recipe ingredients from branch inventory t
 
 Expected result: Store Operations respects role and location access without breaking workflows.
 
-### 9. Regression Checks
+### 10. Regression Checks
 
 - Confirm Transfers can still be created, approved, dispatched, and received.
 - Confirm Inventory reflects Store Operations ledger changes.
@@ -271,6 +334,7 @@ Expected result: Store Operations respects role and location access without brea
 - Confirm all tables with line-item records remain expandable/collapsible.
 - Confirm only users with `master-data.items:create` can add new item master records.
 - Confirm Store Operations still blocks negative stock for wastage, issue to ops, and sales batch consumption.
+- Confirm Emergency Purchase increases stock without changing transfer, receiving, or purchase order records.
 
 Expected result: Phase 9 does not break Purchasing, Transfers, Inventory, or Dashboard stock summaries.
 
@@ -281,11 +345,11 @@ These are intentionally left for the next Store Operations workflow slice:
 - Daily inventory session lock: branch cannot start prep/ops before Beginning Count.
 - EOD lock: branch cannot post stock-touching operations after EOD Count is finalized.
 - Beginning Count prompt when it does not tally with the previous EOD count.
-- Store item/package request: branch requests a local replacement item/package size and HQ approves before use.
+- Store item/package request: branch requests a new local replacement item/package size and HQ approves before use.
 
 ### Phase 9 Pass Criteria
 
-Phase 9 passes when branch staff can select a branch/store, view current stock, receive transfers, post wastage/count/issues/sales, see ledger-driven stock changes, and expand operation records to view line items.
+Phase 9 passes when branch staff can select a branch/store, view current stock, receive transfers, post wastage/count/issues/emergency purchases/sales, see ledger-driven stock changes, and expand operation records to view line items.
 
 ---
 
@@ -686,6 +750,9 @@ Expected result: the workbook can be used as the single source template for all 
 - Refresh the affected Master Data tabs.
 - Confirm imported records are visible and blank active values default to Active.
 - Confirm Supplier Items can distinguish the same internal item by supplier, brand, supplier SKU, pack size, purchase UOM, and default unit cost.
+- Confirm Supplier Items show Base Qty and Base UOM separately, with the Purchase UOM to Base result reading like `1 SACK = 25.00 KG`.
+- In Supplier Items, search by an internal item SKU or name and confirm matching supplier catalog rows are shown.
+- In Supplier Items, filter by Status, Supplier, and Brand and confirm the table narrows to matching rows.
 
 Expected result: valid rows are created or updated without needing one-by-one entry.
 
@@ -726,13 +793,18 @@ Expected result: purchasing options are maintained separately from the internal 
 - Select a catalog item and confirm UOM and default cost load from the selected supplier item.
 - Save the PO and expand it in the table.
 - Confirm the line shows the internal item plus brand/supplier SKU details.
+- Receive the PO.
+- Confirm the receiving document keeps the PO purchase quantity and purchase UOM cost.
+- Confirm the ledger movement posts quantity in the internal item's base UOM and unit cost converted to base UOM cost.
+- Confirm Stock on Hand average unit cost updates using the converted base UOM cost.
 
 Expected result: users choose the intended supplier catalog item before the PO line is saved.
 
-### Known Limitations
+### Costing Notes
 
 - Inventory, receiving, costing, and ledger balances still post to the internal item.
-- Receiving lines display the PO's supplier catalog details, but received stock remains consolidated by internal item.
+- Receiving keeps supplier catalog context, but received stock remains consolidated by internal item.
+- Positive stock count or adjustment variances with no entered cost use current average cost when one exists.
 
 ## Local Database Reset Script
 

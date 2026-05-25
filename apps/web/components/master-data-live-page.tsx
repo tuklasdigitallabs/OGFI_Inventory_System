@@ -22,6 +22,7 @@ type MasterDataLivePageProps = {
 type FieldType = "checkbox" | "email" | "number" | "select" | "text";
 
 type Field = {
+  helper?: string;
   key: string;
   label: string;
   optional?: boolean;
@@ -230,6 +231,7 @@ const configs: ResourceConfig[] = [
       "Supplier SKU",
       "Pack",
       "Purchase UOM",
+      "Purchase UOM to Base",
       "Cost",
       "Status",
     ],
@@ -258,11 +260,24 @@ const configs: ResourceConfig[] = [
       },
       {
         key: "conversionToBase",
-        label: "Purchase UOM to base",
+        helper: "How many base units are inside 1 purchase UOM.",
+        label: "Base Qty",
         optional: true,
         type: "number",
       },
-      { key: "unitCost", label: "Default unit cost", optional: true, type: "number" },
+      {
+        key: "baseUomDisplay",
+        label: "Base UOM",
+        optional: true,
+        readOnly: true,
+        type: "text",
+      },
+      {
+        key: "unitCost",
+        label: "Default unit cost",
+        optional: true,
+        type: "number",
+      },
     ],
     toRows: (records) =>
       records.map((record) => [
@@ -272,6 +287,7 @@ const configs: ResourceConfig[] = [
         text(record.supplierSku),
         text(record.packSize),
         relatedCode(record.purchaseUom),
+        supplierItemConversionLabel(record),
         record.unitCost === null || record.unitCost === undefined
           ? "-"
           : formatCurrency(Number(record.unitCost)),
@@ -1182,21 +1198,56 @@ export function MasterDataLivePage({
                   ))}
                 </select>
               ) : (
-                <input
-                  className={`h-10 rounded-md border px-3 text-sm font-medium text-og-dark ${
-                    fieldErrors[field.key]
-                      ? "border-og-error"
-                      : "border-og-line"
-                  } ${field.readOnly ? "bg-gray-50 text-og-gray" : ""}`}
-                  onChange={(event) =>
-                    updateField(field.key, event.target.value)
-                  }
-                  readOnly={field.readOnly}
-                  required={!field.optional}
-                  step={field.type === "number" ? "0.000001" : undefined}
-                  type={field.type}
-                  value={form[field.key] ?? ""}
-                />
+                <>
+                  <input
+                    className={`h-10 rounded-md border px-3 text-sm font-medium text-og-dark ${
+                      fieldErrors[field.key]
+                        ? "border-og-error"
+                        : "border-og-line"
+                    } ${field.readOnly ? "bg-gray-50 text-og-gray" : ""}`}
+                    onBlur={() => {
+                      if (usesTwoDecimalInput(activeConfig, field)) {
+                        updateField(
+                          field.key,
+                          decimalForInput(form[field.key], 2),
+                        );
+                      }
+                    }}
+                    onChange={(event) =>
+                      updateField(field.key, event.target.value)
+                    }
+                    readOnly={field.readOnly}
+                    required={!field.optional}
+                    step={
+                      field.type === "number"
+                        ? usesTwoDecimalInput(activeConfig, field)
+                          ? "0.01"
+                          : "0.000001"
+                        : undefined
+                    }
+                    type={field.type}
+                    value={
+                      supplierItemBaseUomValue(
+                        activeConfig,
+                        field,
+                        form,
+                        records,
+                      ) ??
+                      form[field.key] ??
+                      ""
+                    }
+                  />
+                  {field.helper ? (
+                    <span className="text-[11px] font-normal leading-4 text-og-gray">
+                      {field.helper}
+                    </span>
+                  ) : null}
+                  {supplierItemConversionHint(activeConfig, field, form, records) ? (
+                    <span className="text-[11px] font-normal leading-4 text-og-gray">
+                      {supplierItemConversionHint(activeConfig, field, form, records)}
+                    </span>
+                  ) : null}
+                </>
               )}
               {fieldErrors[field.key] ? (
                 <span className="inline-flex items-start gap-1 rounded-md bg-red-50 px-2 py-1 text-xs font-semibold leading-4 text-og-error">
@@ -1593,6 +1644,17 @@ function formFromRecord(config: ResourceConfig, record: MasterDataRecord) {
     };
   }
 
+  if (config.resource === "supplier-items") {
+    return Object.fromEntries(
+      config.fields.map((field) => [
+        field.key,
+        field.type === "number"
+          ? decimalForInput(record[field.key], 2)
+          : text(record[field.key]),
+      ]),
+    );
+  }
+
   return Object.fromEntries(
     config.fields.map((field) => [
       field.key,
@@ -1643,6 +1705,11 @@ function applyFilters(
           matches(record.itemType, filters.itemType) &&
           matches(record.categoryId, filters.categoryId)
         );
+      case "supplier-items":
+        return (
+          matches(record.supplierId, filters.supplierId) &&
+          matches(record.brand, filters.brand)
+        );
       case "uom-conversions":
         return (
           matches(record.fromUomId, filters.fromUomId) &&
@@ -1687,6 +1754,22 @@ function filterFieldsFor(config: ResourceConfig): FilterField[] {
           allLabel: "All categories",
           key: "categoryId",
           label: "Category",
+          options: [],
+        },
+      );
+      break;
+    case "supplier-items":
+      fields.push(
+        {
+          allLabel: "All suppliers",
+          key: "supplierId",
+          label: "Supplier",
+          options: [],
+        },
+        {
+          allLabel: "All brands",
+          key: "brand",
+          label: "Brand",
           options: [],
         },
       );
@@ -1757,6 +1840,28 @@ function filterFieldsWithOptions(
           },
           records,
         ),
+      };
+    }
+
+    if (field.key === "supplierId") {
+      return {
+        ...field,
+        options: optionsFor(
+          {
+            key: "supplierId",
+            label: "Supplier",
+            ref: "suppliers",
+            type: "select",
+          },
+          records,
+        ),
+      };
+    }
+
+    if (field.key === "brand") {
+      return {
+        ...field,
+        options: uniqueBrandOptions(records["supplier-items"] ?? []),
       };
     }
 
@@ -1956,14 +2061,16 @@ function payloadFromForm(
 
   return stripEmpty(
     Object.fromEntries(
-      config.fields.map((field) => [
-        field.key,
-        field.type === "checkbox"
-          ? form[field.key] === "true"
-          : field.type === "number"
-            ? numberOrUndefined(form[field.key])
-            : emptyToUndefined(form[field.key]),
-      ]),
+      config.fields
+        .filter((field) => field.key !== "baseUomDisplay")
+        .map((field) => [
+          field.key,
+          field.type === "checkbox"
+            ? form[field.key] === "true"
+            : field.type === "number"
+              ? numberOrUndefined(form[field.key])
+              : emptyToUndefined(form[field.key]),
+        ]),
     ),
   );
 }
@@ -2021,6 +2128,13 @@ function searchText(record: MasterDataRecord) {
     relatedCode(record.fromUom),
     relatedCode(record.toUom),
     relatedName(record.outputItem),
+    record.brand,
+    record.supplierSku,
+    record.packSize,
+    relatedCode(record.item),
+    relatedName(record.item),
+    relatedCode(record.purchaseUom),
+    relatedName(record.supplier),
   ];
 
   if (Array.isArray(record.lines)) {
@@ -2030,6 +2144,17 @@ function searchText(record: MasterDataRecord) {
   }
 
   return parts.map(text).join(" ").toLowerCase();
+}
+
+function uniqueBrandOptions(records: MasterDataRecord[]) {
+  return Array.from(
+    new Set(
+      records
+        .map((record) => text(record.brand).trim())
+        .filter(Boolean)
+        .sort((first, second) => first.localeCompare(second)),
+    ),
+  ).map((brand) => ({ label: brand, value: brand }));
 }
 
 function relatedCode(value: unknown) {
@@ -2056,6 +2181,17 @@ function looseItemLabel(record: MasterDataRecord) {
   return `${decimal(record.looseWholeUnitQty)} ${relatedCode(record.looseWholeUom)} -> ${relatedCode(record.baseUom)} / ${relatedCode(record.looseRemainderUom)}`;
 }
 
+function supplierItemConversionLabel(record: MasterDataRecord) {
+  if (record.conversionToBase === null || record.conversionToBase === undefined) {
+    return "-";
+  }
+
+  const purchaseUom = relatedCode(record.purchaseUom);
+  const baseUom = isRecord(record.item) ? relatedCode(record.item.baseUom) : "-";
+
+  return `1 ${purchaseUom} = ${decimal(record.conversionToBase, 2)} ${baseUom}`;
+}
+
 function status(active: unknown) {
   return active === false ? "Inactive" : "Active";
 }
@@ -2064,12 +2200,77 @@ function text(value: unknown) {
   return value === null || value === undefined ? "" : String(value);
 }
 
-function decimal(value: unknown) {
+function decimal(value: unknown, maximumFractionDigits = 6) {
   if (value === null || value === undefined || value === "") {
     return "";
   }
 
-  return Number(value).toLocaleString("en-PH", { maximumFractionDigits: 6 });
+  return Number(value).toLocaleString("en-PH", { maximumFractionDigits });
+}
+
+function decimalForInput(value: unknown, fractionDigits: number) {
+  if (value === null || value === undefined || value === "") {
+    return "";
+  }
+
+  const numberValue = Number(value);
+
+  return Number.isFinite(numberValue) ? numberValue.toFixed(fractionDigits) : "";
+}
+
+function usesTwoDecimalInput(config: ResourceConfig, field: Field) {
+  return (
+    config.resource === "supplier-items" &&
+    (field.key === "conversionToBase" || field.key === "unitCost")
+  );
+}
+
+function supplierItemBaseUomValue(
+  config: ResourceConfig,
+  field: Field,
+  form: Record<string, string>,
+  records: ResourceState,
+) {
+  if (config.resource !== "supplier-items" || field.key !== "baseUomDisplay") {
+    return null;
+  }
+
+  return selectedItemBaseUom(form.itemId, records);
+}
+
+function supplierItemConversionHint(
+  config: ResourceConfig,
+  field: Field,
+  form: Record<string, string>,
+  records: ResourceState,
+) {
+  if (config.resource !== "supplier-items" || field.key !== "baseUomDisplay") {
+    return "";
+  }
+
+  const purchaseUom = records.uoms?.find(
+    (record) => record.id === form.purchaseUomId,
+  );
+  const baseUom = selectedItemBaseUom(form.itemId, records);
+
+  if (!purchaseUom || !baseUom) {
+    return "";
+  }
+
+  return `Purchase UOM to Base: 1 ${relatedCode(purchaseUom)} = ${
+    form.conversionToBase || "0.00"
+  } ${baseUom}`;
+}
+
+function selectedItemBaseUom(itemId: string | undefined, records: ResourceState) {
+  const item = records.items?.find((record) => record.id === itemId);
+  const baseUom = isRecord(item?.baseUom)
+    ? relatedCode(item?.baseUom)
+    : relatedCode(
+        records.uoms?.find((record) => record.id === item?.baseUomId),
+      );
+
+  return baseUom === "-" ? "" : baseUom;
 }
 
 function formatCurrency(value: number) {

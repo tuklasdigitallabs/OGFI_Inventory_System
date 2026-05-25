@@ -3,6 +3,7 @@ import {
   IsArray,
   IsBoolean,
   IsEmail,
+  IsNotEmpty,
   IsOptional,
   IsString,
   IsUUID,
@@ -20,6 +21,7 @@ export class CreateAdminUserDto {
   fullName!: string;
 
   @IsString()
+  @IsNotEmpty()
   roleId!: string;
 
   @IsOptional()
@@ -52,6 +54,7 @@ export class UpdateAdminUserDto {
 
   @IsOptional()
   @IsString()
+  @IsNotEmpty()
   roleId?: string;
 
   @IsOptional()

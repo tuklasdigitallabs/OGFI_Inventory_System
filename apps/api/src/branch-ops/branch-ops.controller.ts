@@ -6,6 +6,7 @@ import { LocationAccess } from "../rbac/decorators/location-access.decorator";
 import { Permissions } from "../rbac/decorators/permissions.decorator";
 import { BranchOpsService } from "./branch-ops.service";
 import {
+  CreateEmergencyPurchaseDto,
   CreateIssueToOpsDto,
   CreateSalesBatchDto,
   CreateWastageDto,
@@ -83,6 +84,27 @@ export class BranchOpsController {
   @LocationAccess({ source: "query", key: "locationId" })
   listIssues(@Query() query: Record<string, string>) {
     return this.branchOpsService.list("issues", query);
+  }
+
+  @Post("emergency-purchases")
+  @Permissions("branch.emergency-purchases:create")
+  @LocationAccess({ source: "body", key: "locationId" })
+  createEmergencyPurchase(
+    @Body() body: CreateEmergencyPurchaseDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: Request,
+  ) {
+    return this.branchOpsService.createEmergencyPurchase(body, user, {
+      ipAddress: request.ip,
+      userAgent: request.headers["user-agent"],
+    });
+  }
+
+  @Get("emergency-purchases")
+  @Permissions("branch.emergency-purchases:read")
+  @LocationAccess({ source: "query", key: "locationId" })
+  listEmergencyPurchases(@Query() query: Record<string, string>) {
+    return this.branchOpsService.list("emergency-purchases", query);
   }
 
   @Post("sales-batches")

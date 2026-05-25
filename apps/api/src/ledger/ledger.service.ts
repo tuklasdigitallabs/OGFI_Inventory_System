@@ -618,7 +618,17 @@ export class LedgerService {
       return currentState.averageUnitCost;
     }
 
-    return new Prisma.Decimal(dto.unitCostAtTime);
+    const postedUnitCost = new Prisma.Decimal(dto.unitCostAtTime);
+
+    if (
+      postedUnitCost.lte(0) &&
+      currentState.averageUnitCost.gt(0) &&
+      this.costingService.shouldUseCurrentAverageCost(dto.transactionType)
+    ) {
+      return currentState.averageUnitCost;
+    }
+
+    return postedUnitCost;
   }
 
   private enforceNegativeStockPolicy(
@@ -787,6 +797,11 @@ export class LedgerService {
         });
       case ReferenceType.SALES_BATCH:
         return tx.salesBatch.findUnique({
+          where: { id: referenceId },
+          select: { id: true },
+        });
+      case ReferenceType.EMERGENCY_PURCHASE:
+        return tx.emergencyPurchase.findUnique({
           where: { id: referenceId },
           select: { id: true },
         });

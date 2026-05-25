@@ -2,6 +2,7 @@ import {
   PrismaClient,
   ItemType,
   LocationType,
+  Prisma,
   ReferenceType,
   ReasonCodeType,
   RoleCode,
@@ -84,6 +85,8 @@ const permissions = [
   ["branch.stock-counts", "submit", "Submit stock counts"],
   ["branch.issues", "read", "View stock issued to operations"],
   ["branch.issues", "create", "Issue stock to operations"],
+  ["branch.emergency-purchases", "read", "View emergency purchases"],
+  ["branch.emergency-purchases", "create", "Record emergency purchases"],
   ["branch.sales-batches", "read", "View branch sales batches"],
   ["branch.sales-batches", "create", "Create branch sales batches"],
   ["sales.batches", "read", "View sales batches"],
@@ -184,6 +187,8 @@ const rolePermissionRules: Record<RoleCode, Array<[string, string]>> = {
     ["branch.stock-counts", "submit"],
     ["branch.issues", "read"],
     ["branch.issues", "create"],
+    ["branch.emergency-purchases", "read"],
+    ["branch.emergency-purchases", "create"],
     ["branch.sales-batches", "read"],
     ["branch.sales-batches", "create"],
     ["sync", "read"],
@@ -204,6 +209,8 @@ const rolePermissionRules: Record<RoleCode, Array<[string, string]>> = {
     ["branch.stock-counts", "submit"],
     ["branch.issues", "read"],
     ["branch.issues", "create"],
+    ["branch.emergency-purchases", "read"],
+    ["branch.emergency-purchases", "create"],
     ["branch.sales-batches", "read"],
     ["branch.sales-batches", "create"],
     ["sync", "read"],
@@ -230,6 +237,7 @@ const rolePermissionRules: Record<RoleCode, Array<[string, string]>> = {
     ["branch.wastage", "read"],
     ["branch.stock-counts", "read"],
     ["branch.issues", "read"],
+    ["branch.emergency-purchases", "read"],
     ["branch.sales-batches", "read"],
     ["reports", "read"],
   ],
@@ -279,6 +287,7 @@ const uoms = [
   ["BTL", "Bottle"],
   ["CAN", "Can"],
   ["PACK", "Pack"],
+  ["SACK", "Sack"],
 ] as const;
 
 const uomConversions = [
@@ -548,40 +557,40 @@ const suppliers = [
 ] as const;
 
 const supplierItems = [
-  ["Prime Poultry", "CHICKEN-THIGH", "185.000000"],
-  ["Prime Poultry", "CHICKEN-BREAST", "195.000000"],
-  ["Prime Poultry", "BEEF-BRISKET", "420.000000"],
-  ["Manila Meat Depot", "BEEF-BRISKET", "415.000000"],
-  ["Manila Meat Depot", "BEEF-SIRLOIN", "520.000000"],
-  ["Manila Meat Depot", "BEEF-GYUDON", "455.000000"],
-  ["Manila Meat Depot", "PORK-BELLY", "315.000000"],
-  ["Fresh Produce Co.", "BEEF-BOWL", "145.000000"],
-  ["Fresh Produce Co.", "BEEF-BRISKET", "430.000000"],
-  ["Fresh Produce Co.", "CHICKEN-THIGH", "190.000000"],
-  ["Fresh Produce Co.", "LETTUCE-ROMAINE", "95.000000"],
-  ["Fresh Produce Co.", "CABBAGE-GREEN", "58.000000"],
-  ["Fresh Produce Co.", "CARROT", "72.000000"],
-  ["Fresh Produce Co.", "ONION-RED", "110.000000"],
-  ["Fresh Produce Co.", "GARLIC-PEELED", "180.000000"],
-  ["Fresh Produce Co.", "EGG-LARGE", "8.750000"],
-  ["Fresh Produce Co.", "RICE-JASMINE", "68.000000"],
-  ["Golden Grains Trading", "RICE-JASMINE", "66.000000"],
-  ["Golden Grains Trading", "RICE-JAPANESE", "92.000000"],
-  ["Golden Grains Trading", "NOODLE-RAMEN", "118.000000"],
-  ["Golden Grains Trading", "FLOUR-AP", "54.000000"],
-  ["Golden Grains Trading", "COOKING-OIL", "78.000000"],
-  ["SauceWorks Manila", "SOY-SAUCE", "72.000000"],
-  ["SauceWorks Manila", "TERIYAKI-SAUCE", "148.000000"],
-  ["SauceWorks Manila", "MAYO-JAPANESE", "220.000000"],
-  ["PackRight", "BEEF-BOWL", "8.500000"],
-  ["PackRight", "SAUCE-CUP-2OZ", "1.850000"],
-  ["PackRight", "BOWL-24OZ", "5.200000"],
-  ["PackRight", "LID-24OZ", "2.450000"],
-  ["PackRight", "CHOPSTICKS", "0.850000"],
-  ["PackRight", "PAPER-BAG-M", "3.150000"],
-  ["Beverage Hub", "COKE-CAN", "28.000000"],
-  ["Beverage Hub", "BOTTLED-WATER", "16.000000"],
-  ["CleanOps Supply", "DISHWASHING-LIQUID", "95.000000"],
+  ["Prime Poultry", "CHICKEN-THIGH", "Prime", "PP-THIGH-5KG", "5KG/BOX", "BOX", "5", "185.000000"],
+  ["Prime Poultry", "CHICKEN-BREAST", "Prime", "PP-BREAST-5KG", "5KG/BOX", "BOX", "5", "195.000000"],
+  ["Prime Poultry", "BEEF-BRISKET", "Prime Select", "PP-BRISKET-5KG", "5KG/BOX", "BOX", "5", "420.000000"],
+  ["Manila Meat Depot", "BEEF-BRISKET", "MMD Choice", "MMD-BRISKET-5KG", "5KG/BOX", "BOX", "5", "415.000000"],
+  ["Manila Meat Depot", "BEEF-SIRLOIN", "MMD Choice", "MMD-SIRLOIN-5KG", "5KG/BOX", "BOX", "5", "520.000000"],
+  ["Manila Meat Depot", "BEEF-GYUDON", "MMD Slice", "MMD-GYUDON-5KG", "5KG/BOX", "BOX", "5", "455.000000"],
+  ["Manila Meat Depot", "PORK-BELLY", "MMD Choice", "MMD-PORKBELLY-5KG", "5KG/BOX", "BOX", "5", "315.000000"],
+  ["Fresh Produce Co.", "BEEF-BOWL", "House Prep", "FPC-BEEFBOWL-PC", "1PC/PACK", "PC", "1", "145.000000"],
+  ["Fresh Produce Co.", "BEEF-BRISKET", "Market Choice", "FPC-BRISKET-KG", "1KG/BAG", "KG", "1", "430.000000"],
+  ["Fresh Produce Co.", "CHICKEN-THIGH", "Market Choice", "FPC-THIGH-KG", "1KG/BAG", "KG", "1", "190.000000"],
+  ["Fresh Produce Co.", "LETTUCE-ROMAINE", "Farm Fresh", "FPC-ROMAINE-KG", "1KG/BAG", "KG", "1", "95.000000"],
+  ["Fresh Produce Co.", "CABBAGE-GREEN", "Farm Fresh", "FPC-CABBAGE-KG", "1KG/BAG", "KG", "1", "58.000000"],
+  ["Fresh Produce Co.", "CARROT", "Farm Fresh", "FPC-CARROT-KG", "1KG/BAG", "KG", "1", "72.000000"],
+  ["Fresh Produce Co.", "ONION-RED", "Farm Fresh", "FPC-ONION-KG", "1KG/BAG", "KG", "1", "110.000000"],
+  ["Fresh Produce Co.", "GARLIC-PEELED", "Farm Fresh", "FPC-GARLIC-KG", "1KG/BAG", "KG", "1", "180.000000"],
+  ["Fresh Produce Co.", "EGG-LARGE", "Farm Fresh", "FPC-EGG-30PC", "30PC/TRAY", "PACK", "30", "8.750000"],
+  ["Fresh Produce Co.", "RICE-JASMINE", "Dinorado", "FPC-JASMINE-10KG", "10KG/BAG", "BAG", "10", "68.000000"],
+  ["Golden Grains Trading", "RICE-JASMINE", "Golden Grains", "GGT-JASMINE-25KG", "25KG/SACK", "SACK", "25", "66.000000"],
+  ["Golden Grains Trading", "RICE-JAPANESE", "Shinmei", "GGT-SHINMEI-25KG", "25KG/SACK", "SACK", "25", "92.000000"],
+  ["Golden Grains Trading", "NOODLE-RAMEN", "Menya", "GGT-RAMEN-10KG", "10KG/BOX", "BOX", "10", "118.000000"],
+  ["Golden Grains Trading", "FLOUR-AP", "Golden Flour", "GGT-FLOUR-25KG", "25KG/SACK", "SACK", "25", "54.000000"],
+  ["Golden Grains Trading", "COOKING-OIL", "Chef's Oil", "GGT-OIL-12L", "12L/CASE", "CASE", "12", "78.000000"],
+  ["SauceWorks Manila", "SOY-SAUCE", "SauceWorks", "SWM-SOY-12L", "12L/CASE", "CASE", "12", "72.000000"],
+  ["SauceWorks Manila", "TERIYAKI-SAUCE", "SauceWorks", "SWM-TERIYAKI-12L", "12L/CASE", "CASE", "12", "148.000000"],
+  ["SauceWorks Manila", "MAYO-JAPANESE", "Kewpie", "SWM-MAYO-10KG", "10KG/BOX", "BOX", "10", "220.000000"],
+  ["PackRight", "BEEF-BOWL", "PackRight", "PR-BEEFBOWL-PC", "1PC/PACK", "PC", "1", "8.500000"],
+  ["PackRight", "SAUCE-CUP-2OZ", "PackRight", "PR-CUP2OZ-2500PC", "2500PC/CASE", "CASE", "2500", "1.850000"],
+  ["PackRight", "BOWL-24OZ", "PackRight", "PR-BOWL24-500PC", "500PC/CASE", "CASE", "500", "5.200000"],
+  ["PackRight", "LID-24OZ", "PackRight", "PR-LID24-500PC", "500PC/CASE", "CASE", "500", "2.450000"],
+  ["PackRight", "CHOPSTICKS", "PackRight", "PR-CHOP-100PC", "100PC/PACK", "PACK", "100", "0.850000"],
+  ["PackRight", "PAPER-BAG-M", "PackRight", "PR-BAGM-250PC", "250PC/CASE", "CASE", "250", "3.150000"],
+  ["Beverage Hub", "COKE-CAN", "Coca-Cola", "BH-COKE-24CAN", "24CAN/CASE", "CASE", "24", "28.000000"],
+  ["Beverage Hub", "BOTTLED-WATER", "Summit", "BH-WATER-24BTL", "24BTL/CASE", "CASE", "24", "16.000000"],
+  ["CleanOps Supply", "DISHWASHING-LIQUID", "CleanOps", "COS-DISH-12L", "12L/CASE", "CASE", "12", "95.000000"],
 ] as const;
 
 const recipes = [
@@ -924,23 +933,54 @@ async function seedSuppliers() {
     }
   }
 
-  for (const [supplierName, sku, unitCost] of supplierItems) {
+  for (const [
+    supplierName,
+    sku,
+    brand,
+    supplierSku,
+    packSize,
+    purchaseUomCode,
+    conversionToBase,
+    unitCost,
+  ] of supplierItems) {
     const supplier = await prisma.supplier.findFirstOrThrow({
       where: { name: supplierName },
     });
     const item = await prisma.item.findUniqueOrThrow({ where: { sku } });
+    const purchaseUom = await prisma.uom.findUniqueOrThrow({
+      where: { code: purchaseUomCode },
+    });
+    const purchaseUnitCost = new Prisma.Decimal(unitCost).mul(
+      conversionToBase,
+    );
     const existing = await prisma.supplierItem.findFirst({
-      where: { itemId: item.id, supplierId: supplier.id, supplierSku: null },
+      where: { itemId: item.id, supplierId: supplier.id, supplierSku },
     });
 
     if (existing) {
       await prisma.supplierItem.update({
         where: { id: existing.id },
-        data: { active: true, unitCost },
+        data: {
+          active: true,
+          brand,
+          conversionToBase,
+          packSize,
+          purchaseUomId: purchaseUom.id,
+          unitCost: purchaseUnitCost,
+        },
       });
     } else {
       await prisma.supplierItem.create({
-        data: { supplierId: supplier.id, itemId: item.id, unitCost },
+        data: {
+          brand,
+          conversionToBase,
+          itemId: item.id,
+          packSize,
+          purchaseUomId: purchaseUom.id,
+          supplierId: supplier.id,
+          supplierSku,
+          unitCost: purchaseUnitCost,
+        },
       });
     }
   }

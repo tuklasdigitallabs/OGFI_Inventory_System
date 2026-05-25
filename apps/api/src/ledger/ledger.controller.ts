@@ -1,4 +1,15 @@
-import { Body, Controller, Get, Param, Post, Query, Req } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  Req,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { Request } from 'express';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { AuthenticatedUser } from '../auth/types';
@@ -11,10 +22,14 @@ import {
 import { PostLedgerEventDto } from './dto/post-ledger-event.dto';
 import { ReverseLedgerEventDto } from './dto/reverse-ledger-event.dto';
 import { LedgerService } from './ledger.service';
+import { OpeningInventoryImportService } from './opening-inventory-import.service';
 
 @Controller()
 export class LedgerController {
-  constructor(private readonly ledgerService: LedgerService) {}
+  constructor(
+    private readonly ledgerService: LedgerService,
+    private readonly openingInventoryImportService: OpeningInventoryImportService,
+  ) {}
 
   @Get('inventory/stock-on-hand')
   @Permissions('inventory.stock:read')
@@ -35,6 +50,45 @@ export class LedgerController {
   @LocationAccess({ source: 'query', key: 'locationId' })
   adjustmentRequests(@Query() query: Record<string, string>) {
     return this.ledgerService.list('inventory.adjustment-requests', query);
+  }
+
+  @Post('inventory/opening-inventory/import')
+  @Permissions('ledger.events:post')
+  @UseInterceptors(FileInterceptor('file'))
+  importOpeningInventory(
+    @UploadedFile() file: { buffer?: Buffer } | undefined,
+    @Body() body: { businessDate: string; locationId: string },
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: Request,
+  ) {
+    if (!file?.buffer) {
+      return {
+        errorReportBase64: null,
+        errorReportFilename: null,
+        errors: [
+          {
+            errors: ['Upload an .xlsx file.'],
+            row: 0,
+            sheet: 'Opening Inventory',
+            values: {},
+          },
+        ],
+        failed: 1,
+        imported: 0,
+        posted: false,
+        stockCountNumber: null,
+      };
+    }
+
+    return this.openingInventoryImportService.importWorkbook(
+      file.buffer,
+      body,
+      user,
+      {
+        ipAddress: request.ip,
+        userAgent: request.headers['user-agent'],
+      },
+    );
   }
 
   @Post('inventory/adjustment-requests')

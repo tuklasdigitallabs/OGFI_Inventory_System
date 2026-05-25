@@ -49,6 +49,7 @@ enum ReferenceType {
   COUNT
   ISSUE
   SALES_BATCH
+  EMERGENCY_PURCHASE
   ADJUSTMENT
   SYNC_BATCH
 }
@@ -213,27 +214,28 @@ model RolePermission {
 }
 
 model Location {
-  id              String               @id @default(uuid()) @db.Uuid
-  code            String               @unique
-  name            String
-  type            LocationType
-  active          Boolean              @default(true)
-  userAccess      UserLocationAccess[]
-  purchaseOrders  PurchaseOrder[]
-  receivings      Receiving[]
-  ledgerEvents    LedgerEvent[]
-  adjustments     AdjustmentRequest[]
-  stockCounts     StockCount[]
-  wastage         Wastage[]
-  issues          IssueToOps[]
-  salesBatches    SalesBatch[]
-  syncBatches     SyncBatch[]
-  syncDevices     SyncDevice[]
-  sourceTransfers Transfer[]           @relation("TransferSourceLocation")
-  targetTransfers Transfer[]           @relation("TransferTargetLocation")
-  menuPrices      MenuPrice[]
-  createdAt       DateTime             @default(now())
-  updatedAt       DateTime             @updatedAt
+  id                 String               @id @default(uuid()) @db.Uuid
+  code               String               @unique
+  name               String
+  type               LocationType
+  active             Boolean              @default(true)
+  userAccess         UserLocationAccess[]
+  purchaseOrders     PurchaseOrder[]
+  receivings         Receiving[]
+  ledgerEvents       LedgerEvent[]
+  adjustments        AdjustmentRequest[]
+  stockCounts        StockCount[]
+  wastage            Wastage[]
+  issues             IssueToOps[]
+  salesBatches       SalesBatch[]
+  emergencyPurchases EmergencyPurchase[]
+  syncBatches        SyncBatch[]
+  syncDevices        SyncDevice[]
+  sourceTransfers    Transfer[]           @relation("TransferSourceLocation")
+  targetTransfers    Transfer[]           @relation("TransferTargetLocation")
+  menuPrices         MenuPrice[]
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
 
   @@index([type, active])
   @@map("locations")
@@ -253,20 +255,21 @@ model UserLocationAccess {
 }
 
 model Uom {
-  id                  String              @id @default(uuid()) @db.Uuid
-  code                String              @unique
-  name                String
-  active              Boolean             @default(true)
-  items               Item[]              @relation("ItemBaseUom")
-  looseWholeItems     Item[]              @relation("ItemLooseWholeUom")
-  looseRemainderItems Item[]              @relation("ItemLooseRemainderUom")
-  conversionsFrom     UomConversion[]     @relation("ConversionFromUom")
-  conversionsTo       UomConversion[]     @relation("ConversionToUom")
-  supplierItems       SupplierItem[]      @relation("SupplierItemPurchaseUom")
-  purchaseOrderLines  PurchaseOrderLine[]
-  recipeLines         RecipeLine[]
-  createdAt           DateTime            @default(now())
-  updatedAt           DateTime            @updatedAt
+  id                     String                  @id @default(uuid()) @db.Uuid
+  code                   String                  @unique
+  name                   String
+  active                 Boolean                 @default(true)
+  items                  Item[]                  @relation("ItemBaseUom")
+  looseWholeItems        Item[]                  @relation("ItemLooseWholeUom")
+  looseRemainderItems    Item[]                  @relation("ItemLooseRemainderUom")
+  conversionsFrom        UomConversion[]         @relation("ConversionFromUom")
+  conversionsTo          UomConversion[]         @relation("ConversionToUom")
+  supplierItems          SupplierItem[]          @relation("SupplierItemPurchaseUom")
+  purchaseOrderLines     PurchaseOrderLine[]
+  emergencyPurchaseLines EmergencyPurchaseLine[]
+  recipeLines            RecipeLine[]
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
 
   @@map("uoms")
 }
@@ -296,37 +299,38 @@ model Category {
 }
 
 model Item {
-  id                  String              @id @default(uuid()) @db.Uuid
-  sku                 String              @unique
-  name                String
-  itemType            ItemType
-  categoryId          String?             @db.Uuid
-  baseUomId           String              @db.Uuid
-  lowStockThreshold   Decimal?            @db.Decimal(18, 6)
-  looseCountEnabled   Boolean             @default(false)
-  looseWholeUomId     String?             @db.Uuid
-  looseRemainderUomId String?             @db.Uuid
-  looseWholeUnitQty   Decimal?            @db.Decimal(18, 6)
-  active              Boolean             @default(true)
-  category            Category?           @relation(fields: [categoryId], references: [id])
-  baseUom             Uom                 @relation("ItemBaseUom", fields: [baseUomId], references: [id])
-  looseWholeUom       Uom?                @relation("ItemLooseWholeUom", fields: [looseWholeUomId], references: [id])
-  looseRemainderUom   Uom?                @relation("ItemLooseRemainderUom", fields: [looseRemainderUomId], references: [id])
-  supplierItems       SupplierItem[]
-  purchaseOrderLines  PurchaseOrderLine[]
-  receivingLines      ReceivingLine[]
-  transferLines       TransferLine[]
-  ledgerEvents        LedgerEvent[]
-  adjustmentRequests  AdjustmentRequest[]
-  stockCountLines     StockCountLine[]
-  wastageLines        WastageLine[]
-  issueLines          IssueToOpsLine[]
-  recipeOutputs       Recipe[]            @relation("RecipeOutputItem")
-  recipeIngredients   RecipeLine[]        @relation("RecipeIngredientItem")
-  menuPrices          MenuPrice[]         @relation("MenuPriceOutputItem")
-  salesBatchLines     SalesBatchLine[]
-  createdAt           DateTime            @default(now())
-  updatedAt           DateTime            @updatedAt
+  id                     String                  @id @default(uuid()) @db.Uuid
+  sku                    String                  @unique
+  name                   String
+  itemType               ItemType
+  categoryId             String?                 @db.Uuid
+  baseUomId              String                  @db.Uuid
+  lowStockThreshold      Decimal?                @db.Decimal(18, 6)
+  looseCountEnabled      Boolean                 @default(false)
+  looseWholeUomId        String?                 @db.Uuid
+  looseRemainderUomId    String?                 @db.Uuid
+  looseWholeUnitQty      Decimal?                @db.Decimal(18, 6)
+  active                 Boolean                 @default(true)
+  category               Category?               @relation(fields: [categoryId], references: [id])
+  baseUom                Uom                     @relation("ItemBaseUom", fields: [baseUomId], references: [id])
+  looseWholeUom          Uom?                    @relation("ItemLooseWholeUom", fields: [looseWholeUomId], references: [id])
+  looseRemainderUom      Uom?                    @relation("ItemLooseRemainderUom", fields: [looseRemainderUomId], references: [id])
+  supplierItems          SupplierItem[]
+  purchaseOrderLines     PurchaseOrderLine[]
+  receivingLines         ReceivingLine[]
+  transferLines          TransferLine[]
+  ledgerEvents           LedgerEvent[]
+  adjustmentRequests     AdjustmentRequest[]
+  stockCountLines        StockCountLine[]
+  wastageLines           WastageLine[]
+  issueLines             IssueToOpsLine[]
+  emergencyPurchaseLines EmergencyPurchaseLine[]
+  recipeOutputs          Recipe[]                @relation("RecipeOutputItem")
+  recipeIngredients      RecipeLine[]            @relation("RecipeIngredientItem")
+  menuPrices             MenuPrice[]             @relation("MenuPriceOutputItem")
+  salesBatchLines        SalesBatchLine[]
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
 
   @@index([categoryId])
   @@index([baseUomId])
@@ -793,6 +797,42 @@ model IssueToOpsLine {
 
   @@index([itemId])
   @@map("issue_to_ops_lines")
+}
+
+model EmergencyPurchase {
+  id               String                  @id @default(uuid()) @db.Uuid
+  purchaseNumber   String                  @unique
+  locationId       String                  @db.Uuid
+  status           DocumentStatus          @default(POSTED)
+  businessDate     DateTime
+  sourceName       String
+  receiptReference String?
+  reason           String?
+  remarks          String?
+  location         Location                @relation(fields: [locationId], references: [id])
+  lines            EmergencyPurchaseLine[]
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+
+  @@index([locationId, businessDate])
+  @@map("emergency_purchases")
+}
+
+model EmergencyPurchaseLine {
+  id                  String            @id @default(uuid()) @db.Uuid
+  emergencyPurchaseId String            @db.Uuid
+  itemId              String            @db.Uuid
+  uomId               String            @db.Uuid
+  qty                 Decimal           @db.Decimal(18, 6)
+  unitCost            Decimal           @db.Decimal(18, 6)
+  brand               String?
+  emergencyPurchase   EmergencyPurchase @relation(fields: [emergencyPurchaseId], references: [id], onDelete: Cascade)
+  item                Item              @relation(fields: [itemId], references: [id])
+  uom                 Uom               @relation(fields: [uomId], references: [id])
+
+  @@index([itemId])
+  @@index([uomId])
+  @@map("emergency_purchase_lines")
 }
 
 model SalesBatch {

@@ -21,6 +21,7 @@ import { CostingService } from "../costing/costing.service";
 import { LedgerService } from "../ledger/ledger.service";
 import { PrismaService } from "../prisma/prisma.service";
 import {
+  CreateEmergencyPurchaseDto,
   CreateIssueToOpsDto,
   CreateSalesBatchDto,
   CreateWastageDto,
@@ -36,6 +37,11 @@ type QtyLine = {
   itemId: string;
   uomId: string;
   qty: number;
+};
+
+type EmergencyPurchaseLine = QtyLine & {
+  brand?: string;
+  unitCost: number;
 };
 
 type CountLine = {
@@ -70,6 +76,8 @@ export class BranchOpsService {
         return this.getStockCount(query?.id);
       case "issues":
         return this.listIssues(query);
+      case "emergency-purchases":
+        return this.listEmergencyPurchases(query);
       case "sales-batches":
         return this.listSalesBatches(query);
       default:
@@ -331,6 +339,88 @@ export class BranchOpsService {
     return this.toResponse(issue);
   }
 
+  async createEmergencyPurchase(
+    dto: CreateEmergencyPurchaseDto,
+    user: AuthenticatedUser,
+    metadata: RequestAuditMetadata = {},
+  ) {
+    this.assertUserCanAccessLocation(user, dto.locationId);
+    this.assertUniqueItems(dto.lines);
+    const lines = await this.normalizeEmergencyPurchaseLines(dto.lines);
+
+    const emergencyPurchase = await this.prisma.$transaction(async (tx) => {
+      await this.validateLocationAndItems(
+        tx,
+        dto.locationId,
+        lines.map((line) => line.itemId),
+      );
+
+      const created = await tx.emergencyPurchase.create({
+        data: {
+          purchaseNumber: await this.nextDocumentNumber(
+            tx,
+            "EP",
+            "emergencyPurchase",
+          ),
+          locationId: dto.locationId,
+          status: DocumentStatus.POSTED,
+          businessDate: new Date(dto.businessDate),
+          sourceName: dto.sourceName.trim(),
+          receiptReference: dto.receiptReference?.trim() || undefined,
+          reason: dto.reason?.trim() || undefined,
+          remarks: dto.remarks?.trim() || undefined,
+          lines: {
+            create: lines.map((line) => ({
+              itemId: line.itemId,
+              uomId: line.uomId,
+              qty: line.qty,
+              unitCost: line.unitCost,
+              brand: line.brand?.trim() || undefined,
+            })),
+          },
+        },
+        include: emergencyPurchaseInclude,
+      });
+
+      await this.recordAudit(
+        tx,
+        "branch.emergency-purchases.posted",
+        "EmergencyPurchase",
+        created,
+        user,
+        metadata,
+      );
+
+      return created;
+    });
+
+    for (const line of lines) {
+      await this.ledgerService.postEvent(
+        {
+          uuid: randomUUID(),
+          locationId: dto.locationId,
+          itemId: line.itemId,
+          transactionType: TransactionType.RECEIVE,
+          qtyIn: line.qty,
+          unitCostAtTime: line.unitCost,
+          referenceType: ReferenceType.EMERGENCY_PURCHASE,
+          referenceId: emergencyPurchase.id,
+          businessDate: dto.businessDate,
+          metadata: {
+            purchaseNumber: emergencyPurchase.purchaseNumber,
+            sourceName: emergencyPurchase.sourceName,
+            receiptReference: emergencyPurchase.receiptReference,
+            brand: line.brand,
+          },
+        },
+        user,
+        metadata,
+      );
+    }
+
+    return this.toResponse(emergencyPurchase);
+  }
+
   async createSalesBatch(
     dto: CreateSalesBatchDto,
     user: AuthenticatedUser,
@@ -453,6 +543,20 @@ export class BranchOpsService {
     });
 
     return { resource: "branch.issues", data: this.toResponse(data) };
+  }
+
+  private async listEmergencyPurchases(query?: Record<string, string>) {
+    const data = await this.prisma.emergencyPurchase.findMany({
+      where: this.locationWhere(query),
+      include: emergencyPurchaseInclude,
+      orderBy: { createdAt: "desc" },
+      take: this.parseTake(query?.take),
+    });
+
+    return {
+      resource: "branch.emergency-purchases",
+      data: this.toResponse(data),
+    };
   }
 
   private async listSalesBatches(query?: Record<string, string>) {
@@ -631,6 +735,28 @@ export class BranchOpsService {
         ...line,
         qty: await this.convertToBaseQty(line.itemId, line.uomId, line.qty),
       })),
+    );
+  }
+
+  private normalizeEmergencyPurchaseLines(lines: EmergencyPurchaseLine[]) {
+    return Promise.all(
+      lines.map(async (line) => {
+        const baseQty = await this.convertToBaseQty(
+          line.itemId,
+          line.uomId,
+          line.qty,
+        );
+        const baseUnitCost = new Prisma.Decimal(line.unitCost)
+          .mul(line.qty)
+          .div(baseQty)
+          .toNumber();
+
+        return {
+          ...line,
+          qty: baseQty,
+          unitCost: baseUnitCost,
+        };
+      }),
     );
   }
 
@@ -816,7 +942,12 @@ export class BranchOpsService {
   private async nextDocumentNumber(
     tx: Prisma.TransactionClient,
     prefix: string,
-    model: "wastage" | "stockCount" | "issueToOps" | "salesBatch",
+    model:
+      | "wastage"
+      | "stockCount"
+      | "issueToOps"
+      | "emergencyPurchase"
+      | "salesBatch",
   ) {
     const start = new Date();
     start.setHours(0, 0, 0, 0);
@@ -832,7 +963,9 @@ export class BranchOpsService {
           ? await tx.stockCount.count({ where })
           : model === "issueToOps"
             ? await tx.issueToOps.count({ where })
-            : await tx.salesBatch.count({ where });
+            : model === "emergencyPurchase"
+              ? await tx.emergencyPurchase.count({ where })
+              : await tx.salesBatch.count({ where });
     const datePart = start.toISOString().slice(0, 10).replace(/-/g, "");
 
     return `${prefix}-${datePart}-${String(count + 1).padStart(4, "0")}`;
@@ -916,6 +1049,16 @@ const issueInclude = {
     },
   },
 } satisfies Prisma.IssueToOpsInclude;
+
+const emergencyPurchaseInclude = {
+  location: true,
+  lines: {
+    include: {
+      item: { include: itemInclude },
+      uom: true,
+    },
+  },
+} satisfies Prisma.EmergencyPurchaseInclude;
 
 const salesBatchInclude = {
   location: true,

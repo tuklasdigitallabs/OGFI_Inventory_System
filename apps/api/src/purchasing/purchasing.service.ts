@@ -486,11 +486,19 @@ export class PurchasingService {
 
       for (const line of receiving.lines) {
         const acceptedQty = new Prisma.Decimal(line.acceptedQty);
-        const unitCost = new Prisma.Decimal(line.unitCost);
+        const purchaseOrderLine = purchaseOrder?.lines.find(
+          (orderLine) => orderLine.itemId === line.itemId,
+        );
 
         if (acceptedQty.lte(0)) {
           continue;
         }
+
+        const ledgerCost = await this.receivingLedgerCost(
+          tx,
+          line,
+          purchaseOrderLine,
+        );
 
         await tx.ledgerEvent.create({
           data: {
@@ -498,16 +506,18 @@ export class PurchasingService {
             locationId: receiving.locationId,
             itemId: line.itemId,
             transactionType: TransactionType.RECEIVE,
-            qtyIn: acceptedQty,
+            qtyIn: ledgerCost.qtyIn,
             qtyOut: new Prisma.Decimal(0),
-            unitCostAtTime: unitCost,
-            extendedCost: acceptedQty.mul(unitCost),
+            unitCostAtTime: ledgerCost.unitCostAtTime,
+            extendedCost: ledgerCost.qtyIn.mul(ledgerCost.unitCostAtTime),
             referenceType: ReferenceType.RECEIVING,
             referenceId: receiving.id,
             businessDate: receiving.businessDate,
             createdById: user.id,
             approvedById: user.id,
             metadata: {
+              acceptedPurchaseQty: acceptedQty.toString(),
+              ledgerBaseQty: ledgerCost.qtyIn.toString(),
               receivingNumber: receiving.receivingNumber,
               purchaseOrderId: receiving.purchaseOrderId,
             },
@@ -647,6 +657,91 @@ export class PurchasingService {
       costOverriddenById: isOverride ? user.id : undefined,
       costOverriddenAt: isOverride ? new Date() : undefined,
     };
+  }
+
+  private async receivingLedgerCost(
+    tx: Prisma.TransactionClient,
+    line: Prisma.ReceivingLineGetPayload<Record<string, never>>,
+    purchaseOrderLine?: Prisma.PurchaseOrderLineGetPayload<
+      Record<string, never>
+    >,
+  ) {
+    const acceptedQty = new Prisma.Decimal(line.acceptedQty);
+    const documentUnitCost = new Prisma.Decimal(line.unitCost);
+
+    if (!purchaseOrderLine) {
+      return {
+        qtyIn: acceptedQty,
+        unitCostAtTime: documentUnitCost,
+      };
+    }
+
+    const qtyIn = await this.purchaseQtyToBaseQty(
+      tx,
+      purchaseOrderLine.itemId,
+      purchaseOrderLine.uomId,
+      acceptedQty,
+      purchaseOrderLine.supplierItemId,
+    );
+
+    return {
+      qtyIn,
+      unitCostAtTime: documentUnitCost.mul(acceptedQty).div(qtyIn),
+    };
+  }
+
+  private async purchaseQtyToBaseQty(
+    tx: Prisma.TransactionClient,
+    itemId: string,
+    uomId: string,
+    qty: Prisma.Decimal,
+    supplierItemId: string | null,
+  ) {
+    const item = await tx.item.findFirst({
+      where: { id: itemId, active: true },
+      select: { baseUomId: true, sku: true },
+    });
+
+    if (!item) {
+      throw new BadRequestException("Item does not exist or is inactive.");
+    }
+
+    if (item.baseUomId === uomId) {
+      return qty;
+    }
+
+    if (supplierItemId) {
+      const supplierItem = await tx.supplierItem.findFirst({
+        where: {
+          active: true,
+          id: supplierItemId,
+          itemId,
+          purchaseUomId: uomId,
+        },
+        select: { conversionToBase: true },
+      });
+
+      if (supplierItem?.conversionToBase) {
+        return qty.mul(supplierItem.conversionToBase);
+      }
+    }
+
+    const conversion = await tx.uomConversion.findUnique({
+      where: {
+        fromUomId_toUomId: {
+          fromUomId: uomId,
+          toUomId: item.baseUomId,
+        },
+      },
+    });
+
+    if (!conversion) {
+      throw new BadRequestException(
+        `No UOM conversion from purchase UOM to base UOM is configured for ${item.sku}.`,
+      );
+    }
+
+    return qty.mul(conversion.factor);
   }
 
   private async validatePurchaseOrderTargets(

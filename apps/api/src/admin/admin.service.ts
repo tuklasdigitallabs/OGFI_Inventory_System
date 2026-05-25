@@ -872,19 +872,26 @@ export class AdminService {
   }
 
   private async resolveRoleId(roleIdOrCode: string) {
-    const roleId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      roleIdOrCode,
+    const roleSelector = roleIdOrCode.trim();
+    const roleId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      roleSelector,
     )
-      ? roleIdOrCode
+      ? roleSelector
       : undefined;
-    const roleCode = Object.values(RoleCode).includes(roleIdOrCode as RoleCode)
-      ? (roleIdOrCode as RoleCode)
+    const normalizedRoleCode = roleSelector
+      .replace(/[\s-]+/g, "_")
+      .toUpperCase();
+    const roleCode = Object.values(RoleCode).includes(
+      normalizedRoleCode as RoleCode,
+    )
+      ? (normalizedRoleCode as RoleCode)
       : undefined;
     const role = await this.prisma.role.findFirst({
       where: {
         OR: [
           ...(roleId ? [{ id: roleId }] : []),
           ...(roleCode ? [{ code: roleCode }] : []),
+          { name: { equals: roleSelector, mode: "insensitive" } },
         ],
       },
       select: { id: true },

@@ -105,8 +105,14 @@ function makeTx() {
     salesBatch: {
       findUnique: jest.fn(),
     },
+    emergencyPurchase: {
+      findUnique: jest.fn(),
+    },
     syncBatch: {
       findUnique: jest.fn(),
+    },
+    adjustmentRequest: {
+      findUnique: jest.fn().mockResolvedValue({ id: baseDto.referenceId }),
     },
   };
 
@@ -351,6 +357,48 @@ describe("LedgerService", () => {
         qtyIn: 0,
         qtyOut: 5,
         unitCostAtTime: 999,
+      },
+      user,
+    );
+
+    expect(tx.ledgerEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          unitCostAtTime: new Prisma.Decimal(15),
+          extendedCost: new Prisma.Decimal(75),
+        }),
+      }),
+    );
+  });
+
+  it("uses current moving average cost for positive count variances without entered cost", async () => {
+    const { service, tx } = makeService();
+    tx.ledgerEvent.findUnique.mockResolvedValue(null);
+    tx.stockCount.findUnique.mockResolvedValue({ id: baseDto.referenceId });
+    tx.ledgerEvent.findMany.mockResolvedValue([
+      makeEvent({
+        transactionType: TransactionType.RECEIVE,
+        qtyIn: new Prisma.Decimal(10),
+        unitCostAtTime: new Prisma.Decimal(10),
+        extendedCost: new Prisma.Decimal(100),
+      }),
+      makeEvent({
+        uuid: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        transactionType: TransactionType.RECEIVE,
+        qtyIn: new Prisma.Decimal(10),
+        unitCostAtTime: new Prisma.Decimal(20),
+        extendedCost: new Prisma.Decimal(200),
+      }),
+    ]);
+
+    await service.postEvent(
+      {
+        ...baseDto,
+        referenceType: ReferenceType.COUNT,
+        transactionType: TransactionType.STOCK_COUNT,
+        qtyIn: 5,
+        qtyOut: 0,
+        unitCostAtTime: 0,
       },
       user,
     );

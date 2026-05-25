@@ -45,7 +45,26 @@ type SimpleForm = {
   looseWholeUnits: string;
 };
 
-type StoreTab = "stock" | "transfers" | "wastage" | "count" | "issue" | "sales";
+type EmergencyPurchaseForm = {
+  itemId: string;
+  uomId: string;
+  qty: string;
+  unitCost: string;
+  sourceName: string;
+  brand: string;
+  receiptReference: string;
+  reason: string;
+  remarks: string;
+};
+
+type StoreTab =
+  | "stock"
+  | "transfers"
+  | "wastage"
+  | "count"
+  | "issue"
+  | "emergency"
+  | "sales";
 type StockCountTypeOption = "OPENING" | "EOD";
 
 type ReceiveForm = {
@@ -71,12 +90,25 @@ const emptyReceiveForm: ReceiveForm = {
   transfer: null,
 };
 
+const blankEmergencyPurchaseForm: EmergencyPurchaseForm = {
+  itemId: "",
+  uomId: "",
+  qty: "",
+  unitCost: "",
+  sourceName: "",
+  brand: "",
+  receiptReference: "",
+  reason: "",
+  remarks: "",
+};
+
 const storeTabs: Array<{ id: StoreTab; label: string; icon: IconName }> = [
   { id: "stock", label: "Stock On Hand", icon: "Package" },
   { id: "transfers", label: "Incoming Transfers", icon: "Inbox" },
   { id: "wastage", label: "Wastage", icon: "ClipboardList" },
   { id: "count", label: "Stock Count", icon: "ClipboardCheck" },
   { id: "issue", label: "Issue to Ops", icon: "Utensils" },
+  { id: "emergency", label: "Emergency Purchase", icon: "ShoppingCart" },
   { id: "sales", label: "Sales Batch", icon: "ReceiptText" },
 ];
 
@@ -108,12 +140,17 @@ export function StoreOperationsExpandedPage({
     [],
   );
   const [issueRows, setIssueRows] = useState<BranchOperationRecord[]>([]);
+  const [emergencyRows, setEmergencyRows] = useState<BranchOperationRecord[]>(
+    [],
+  );
   const [salesRows, setSalesRows] = useState<BranchOperationRecord[]>([]);
   const [activeTab, setActiveTab] = useState<StoreTab>("stock");
   const [user, setUser] = useState<AuthenticatedUser | null>(null);
   const [wastageForm, setWastageForm] = useState<SimpleForm>(blankSimpleForm);
   const [countForm, setCountForm] = useState<SimpleForm>(blankSimpleForm);
   const [issueForm, setIssueForm] = useState<SimpleForm>(blankSimpleForm);
+  const [emergencyForm, setEmergencyForm] =
+    useState<EmergencyPurchaseForm>(blankEmergencyPurchaseForm);
   const [notice, setNotice] = useState<string | null>(null);
   const [salesForm, setSalesForm] = useState<SimpleForm>(blankSimpleForm);
 
@@ -288,6 +325,15 @@ export function StoreOperationsExpandedPage({
         setIssueRows([]);
       }
 
+      if (
+        currentUser.permissions.includes("branch.emergency-purchases:read")
+      ) {
+        const response = await client.branchEmergencyPurchases(locationId);
+        setEmergencyRows(response.data);
+      } else {
+        setEmergencyRows([]);
+      }
+
       if (currentUser.permissions.includes("branch.sales-batches:read")) {
         const response = await client.branchSalesBatches(locationId);
         setSalesRows(response.data);
@@ -410,6 +456,39 @@ export function StoreOperationsExpandedPage({
         ],
       });
       setIssueForm(blankSimpleForm);
+    });
+  }
+
+  async function submitEmergencyPurchase(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!window.navigator.onLine) {
+      setError(
+        "Emergency purchases require a live connection because they add stock and cost into the inventory ledger.",
+      );
+      return;
+    }
+
+    await submitAction(async (client) => {
+      validateUomSelection(emergencyForm, items, uomConversions);
+      await client.createBranchEmergencyPurchase({
+        locationId: selectedLocationId,
+        businessDate: today(),
+        sourceName: emergencyForm.sourceName,
+        receiptReference: emergencyForm.receiptReference || undefined,
+        reason: emergencyForm.reason || undefined,
+        remarks: emergencyForm.remarks || undefined,
+        lines: [
+          {
+            itemId: emergencyForm.itemId,
+            uomId: emergencyForm.uomId,
+            qty: Number(emergencyForm.qty),
+            unitCost: Number(emergencyForm.unitCost),
+            brand: emergencyForm.brand || undefined,
+          },
+        ],
+      });
+      setEmergencyForm(blankEmergencyPurchaseForm);
     });
   }
 
@@ -655,6 +734,17 @@ export function StoreOperationsExpandedPage({
               stockRows={stockRows}
               submit={submitIssue}
               title="Issue to Ops"
+              uoms={uoms}
+            />
+          ) : null}
+          {activeTab === "emergency" ? (
+            <EmergencyPurchaseForm
+              disabled={saving}
+              form={emergencyForm}
+              items={items}
+              records={emergencyRows}
+              setForm={setEmergencyForm}
+              submit={submitEmergencyPurchase}
               uoms={uoms}
             />
           ) : null}
@@ -1224,6 +1314,235 @@ function OperationForm({
   );
 }
 
+function EmergencyPurchaseForm({
+  disabled,
+  form,
+  items,
+  records,
+  setForm,
+  submit,
+  uoms,
+}: {
+  disabled: boolean;
+  form: EmergencyPurchaseForm;
+  items: MasterDataRecord[];
+  records: BranchOperationRecord[];
+  setForm: (form: EmergencyPurchaseForm) => void;
+  submit: (event: FormEvent<HTMLFormElement>) => void;
+  uoms: MasterDataRecord[];
+}) {
+  const [expandedRecordId, setExpandedRecordId] = useState<string | null>(null);
+  const selectedItem = items.find((item) => item.id === form.itemId);
+
+  return (
+    <section className="flex flex-col gap-4">
+      <PanelTitle icon="ShoppingCart" title="Emergency Purchase" compact />
+      <form
+        className="grid gap-3 md:grid-cols-[minmax(220px,1fr)_150px_160px_160px]"
+        onSubmit={submit}
+      >
+        <label className="flex flex-col gap-1 text-xs font-semibold text-og-dark">
+          Item
+          <select
+            className="h-10 rounded-md border border-og-line px-3 text-sm font-normal"
+            required
+            value={form.itemId}
+            onChange={(event) => {
+              const item = items.find((record) => record.id === event.target.value);
+              setForm({
+                ...form,
+                itemId: event.target.value,
+                uomId: itemBaseUomId(item),
+              });
+            }}
+          >
+            <option value="">Select item</option>
+            {items.map((item) => (
+              <option key={item.id} value={item.id}>
+                {recordLabel(item, "sku")}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-xs font-semibold text-og-dark">
+          Qty purchased
+          <input
+            className="h-10 rounded-md border border-og-line px-3 text-sm font-normal"
+            min="0.000001"
+            required
+            step="0.000001"
+            type="number"
+            value={form.qty}
+            onChange={(event) => setForm({ ...form, qty: event.target.value })}
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-xs font-semibold text-og-dark">
+          UOM
+          <select
+            className="h-10 rounded-md border border-og-line px-3 text-sm font-normal"
+            required
+            value={form.uomId}
+            onChange={(event) => setForm({ ...form, uomId: event.target.value })}
+          >
+            <option value="">Select UOM</option>
+            {uoms.map((uom) => (
+              <option key={uom.id} value={uom.id}>
+                {recordLabel(uom, "code")}
+              </option>
+            ))}
+          </select>
+          {selectedItem ? (
+            <span className="text-[11px] font-normal text-og-gray">
+              Default: {itemBaseUomCode(selectedItem)}
+            </span>
+          ) : null}
+        </label>
+        <label className="flex flex-col gap-1 text-xs font-semibold text-og-dark">
+          Unit Cost
+          <input
+            className="h-10 rounded-md border border-og-line px-3 text-sm font-normal"
+            min="0.000001"
+            required
+            step="0.000001"
+            type="number"
+            value={form.unitCost}
+            onChange={(event) =>
+              setForm({ ...form, unitCost: event.target.value })
+            }
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-xs font-semibold text-og-dark">
+          Source / Store
+          <input
+            className="h-10 rounded-md border border-og-line px-3 text-sm font-normal"
+            required
+            type="text"
+            value={form.sourceName}
+            onChange={(event) =>
+              setForm({ ...form, sourceName: event.target.value })
+            }
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-xs font-semibold text-og-dark">
+          Brand
+          <input
+            className="h-10 rounded-md border border-og-line px-3 text-sm font-normal"
+            type="text"
+            value={form.brand}
+            onChange={(event) => setForm({ ...form, brand: event.target.value })}
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-xs font-semibold text-og-dark">
+          Receipt Ref
+          <input
+            className="h-10 rounded-md border border-og-line px-3 text-sm font-normal"
+            type="text"
+            value={form.receiptReference}
+            onChange={(event) =>
+              setForm({ ...form, receiptReference: event.target.value })
+            }
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-xs font-semibold text-og-dark">
+          Reason
+          <input
+            className="h-10 rounded-md border border-og-line px-3 text-sm font-normal"
+            type="text"
+            value={form.reason}
+            onChange={(event) => setForm({ ...form, reason: event.target.value })}
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-xs font-semibold text-og-dark md:col-span-3">
+          Remarks
+          <input
+            className="h-10 rounded-md border border-og-line px-3 text-sm font-normal"
+            type="text"
+            value={form.remarks}
+            onChange={(event) =>
+              setForm({ ...form, remarks: event.target.value })
+            }
+          />
+        </label>
+        <button
+          className="inline-flex h-10 w-fit items-center gap-2 self-end rounded-md bg-og-green px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={disabled}
+          type="submit"
+        >
+          <Icon name="Save" size={16} />
+          Post
+        </button>
+      </form>
+      <div className="overflow-x-auto rounded-md border border-og-line">
+        <table className="w-full min-w-[640px] border-collapse text-left text-sm">
+          <thead>
+            <tr>
+              {["Reference", "Date", "Source", "Lines", "Status"].map(
+                (column) => (
+                  <th
+                    className="px-3 py-2 text-xs font-bold text-og-gray"
+                    key={column}
+                  >
+                    {column}
+                  </th>
+                ),
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {records.length === 0 ? (
+              <StateRow colSpan={5} label="No emergency purchase records" />
+            ) : null}
+            {records.map((record) => {
+              const expanded = expandedRecordId === record.id;
+
+              return (
+                <Fragment key={record.id}>
+                  <tr className="border-t border-og-line">
+                    <td className="px-3 py-2 font-semibold text-og-dark">
+                      {text(record.purchaseNumber)}
+                    </td>
+                    <td className="px-3 py-2 text-og-dark">
+                      {formatDate(record.businessDate)}
+                    </td>
+                    <td className="px-3 py-2 text-og-dark">
+                      {text(record.sourceName)}
+                    </td>
+                    <td className="px-3 py-2 text-og-dark">
+                      <button
+                        className="inline-flex h-8 items-center gap-2 rounded-md border border-og-line px-2 text-sm font-semibold text-og-dark hover:border-og-green hover:text-og-green"
+                        type="button"
+                        onClick={() =>
+                          setExpandedRecordId(expanded ? null : record.id)
+                        }
+                      >
+                        <Icon
+                          name={expanded ? "ChevronUp" : "ChevronDown"}
+                          size={14}
+                        />
+                        {record.lines.length}
+                      </button>
+                    </td>
+                    <td className="px-3 py-2 text-og-dark">
+                      <StatusBadge value={record.status ?? "POSTED"} />
+                    </td>
+                  </tr>
+                  {expanded ? (
+                    <tr className="border-t border-og-line bg-gray-50">
+                      <td className="px-3 py-3" colSpan={5}>
+                        <BranchOperationLineDetails record={record} />
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 function PanelTitle({
   compact = false,
   icon,
@@ -1521,7 +1840,7 @@ function relatedCode(value: unknown) {
 }
 
 function validateUomSelection(
-  form: SimpleForm,
+  form: { itemId: string; uomId: string },
   items: MasterDataRecord[],
   conversions: MasterDataRecord[],
 ) {

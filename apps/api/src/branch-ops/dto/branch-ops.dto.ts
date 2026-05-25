@@ -4,6 +4,7 @@ import {
   IsArray,
   IsDateString,
   IsEnum,
+  IsNotEmpty,
   IsOptional,
   IsString,
   IsUUID,
@@ -61,6 +62,46 @@ export class CreateIssueToOpsDto {
   @ValidateNested({ each: true })
   @Type(() => BranchQtyLineDto)
   lines!: BranchQtyLineDto[];
+}
+
+export class EmergencyPurchaseLineDto extends BranchQtyLineDto {
+  @Type(() => Number)
+  @Min(0.000001)
+  unitCost!: number;
+
+  @IsOptional()
+  @IsString()
+  brand?: string;
+}
+
+export class CreateEmergencyPurchaseDto {
+  @IsUUID()
+  locationId!: string;
+
+  @IsDateString()
+  businessDate!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  sourceName!: string;
+
+  @IsOptional()
+  @IsString()
+  receiptReference?: string;
+
+  @IsOptional()
+  @IsString()
+  reason?: string;
+
+  @IsOptional()
+  @IsString()
+  remarks?: string;
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @ValidateNested({ each: true })
+  @Type(() => EmergencyPurchaseLineDto)
+  lines!: EmergencyPurchaseLineDto[];
 }
 
 export class StockCountLineDto {
