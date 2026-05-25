@@ -7,6 +7,7 @@ HOST_PORT="${WEB_HOST_PORT:-3001}"
 CONTAINER_PORT="${WEB_CONTAINER_PORT:-3001}"
 WEB_NETWORK="${WEB_NETWORK:-og-inventory_default}"
 WEB_NETWORK_ALIAS="${WEB_NETWORK_ALIAS:-web}"
+NGINX_CONTAINER="${NGINX_CONTAINER:-og_nginx}"
 
 if docker ps -a --format '{{.Names}}' | grep -Fxq "$CONTAINER_NAME"; then
   docker rm -f "$CONTAINER_NAME"
@@ -20,6 +21,10 @@ docker run -d \
 
 if docker network inspect "$WEB_NETWORK" >/dev/null 2>&1; then
   docker network connect --alias "$WEB_NETWORK_ALIAS" "$WEB_NETWORK" "$CONTAINER_NAME"
+fi
+
+if docker ps --format '{{.Names}}' | grep -Fxq "$NGINX_CONTAINER"; then
+  docker restart "$NGINX_CONTAINER" >/dev/null
 fi
 
 printf "Started %s from %s on port %s:%s\n" \
