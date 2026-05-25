@@ -7,8 +7,12 @@ import {
   Post,
   Query,
   Req,
+  Res,
+  UploadedFile,
+  UseInterceptors,
 } from "@nestjs/common";
-import { Request } from "express";
+import { FileInterceptor } from "@nestjs/platform-express";
+import { Request, Response } from "express";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { AuthenticatedUser } from "../auth/types";
 import { Permissions } from "../rbac/decorators/permissions.decorator";
@@ -31,11 +35,90 @@ import {
   UpdateUomConversionDto,
   UpdateUomDto,
 } from "./dto/master-data.dto";
+import { MasterDataImportService } from "./master-data-import.service";
 import { MasterDataService } from "./master-data.service";
 
 @Controller("admin")
 export class MasterDataController {
-  constructor(private readonly masterDataService: MasterDataService) {}
+  constructor(
+    private readonly masterDataImportService: MasterDataImportService,
+    private readonly masterDataService: MasterDataService,
+  ) {}
+
+  @Get("master-data/import-template")
+  @Permissions(
+    "master-data.items:read",
+    "master-data.uoms:read",
+    "master-data.uom-conversions:read",
+    "master-data.suppliers:read",
+    "master-data.locations:read",
+    "master-data.categories:read",
+    "master-data.reason-codes:read",
+    "master-data.recipes:read",
+  )
+  async downloadImportTemplate(@Res() response: Response) {
+    const buffer = await this.masterDataImportService.templateWorkbook();
+    response.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+    response.setHeader(
+      "Content-Disposition",
+      'attachment; filename="OGFI_Master_Data_Template.xlsx"',
+    );
+    response.send(buffer);
+  }
+
+  @Post("master-data/import")
+  @Permissions(
+    "master-data.items:create",
+    "master-data.items:update",
+    "master-data.uoms:create",
+    "master-data.uoms:update",
+    "master-data.uom-conversions:create",
+    "master-data.uom-conversions:update",
+    "master-data.suppliers:create",
+    "master-data.suppliers:update",
+    "master-data.locations:create",
+    "master-data.locations:update",
+    "master-data.categories:create",
+    "master-data.categories:update",
+    "master-data.reason-codes:create",
+    "master-data.reason-codes:update",
+    "master-data.recipes:create",
+    "master-data.recipes:update",
+  )
+  @UseInterceptors(FileInterceptor("file"))
+  importMasterData(
+    @UploadedFile() file: { buffer?: Buffer } | undefined,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: Request,
+  ) {
+    if (!file?.buffer) {
+      return {
+        created: 0,
+        errorReportBase64: null,
+        errorReportFilename: null,
+        errors: [
+          {
+            errors: ["Upload an .xlsx file."],
+            row: 0,
+            sheet: "Instructions",
+            values: {},
+          },
+        ],
+        failed: 1,
+        imported: 0,
+        updated: 0,
+      };
+    }
+
+    return this.masterDataImportService.importWorkbook(
+      file.buffer,
+      user,
+      this.auditMetadata(request),
+    );
+  }
 
   @Get("items")
   @Permissions("master-data.items:read")

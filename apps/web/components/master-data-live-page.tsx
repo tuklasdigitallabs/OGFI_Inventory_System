@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/lib/icons";
 import type { IconName } from "@/lib/icons";
 import type { Screen } from "@/lib/screens";
@@ -8,6 +8,7 @@ import {
   ApiClient,
   TOKEN_KEY,
   type AuthenticatedUser,
+  type MasterDataImportResult,
   type MasterDataRecord,
   type MasterDataResource,
 } from "@/lib/api-client";
@@ -359,6 +360,9 @@ export function MasterDataLivePage({
   const [form, setForm] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [filters, setFilters] = useState<FilterState>({});
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] =
+    useState<MasterDataImportResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [recipeLines, setRecipeLines] = useState<RecipeLineForm[]>([
     blankRecipeLine,
@@ -370,6 +374,7 @@ export function MasterDataLivePage({
   const [user, setUser] = useState<AuthenticatedUser | null>(null);
   const [yieldObservation, setYieldObservation] =
     useState<YieldObservationForm>(blankYieldObservation);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const activeConfig =
     configs.find((config) => config.resource === activeResource) ?? configs[0];
@@ -385,6 +390,8 @@ export function MasterDataLivePage({
     [activeConfig, visibleRecords],
   );
   const canCreateActiveResource = canCreateResource(activeResource, user);
+  const canDownloadTemplate = canDownloadMasterDataTemplate(user);
+  const canImportTemplate = canImportMasterDataTemplate(user);
   const visibleConfigs = useMemo(() => {
     const readableConfigs = configs.filter((config) =>
       canReadResource(config.resource, user),
@@ -539,6 +546,91 @@ export function MasterDataLivePage({
 
   function clearFilters() {
     setFilters({});
+  }
+
+  async function downloadTemplate() {
+    const token = window.localStorage.getItem(TOKEN_KEY);
+
+    if (!token) {
+      setTableError("Sign in again to download the template.");
+      return;
+    }
+
+    setTableError(null);
+
+    try {
+      const client = new ApiClient(token);
+      const blob = await client.downloadMasterDataTemplate();
+      downloadBlob(blob, "OGFI_Master_Data_Template.xlsx");
+    } catch (error) {
+      setTableError(
+        error instanceof Error ? error.message : "Unable to download template.",
+      );
+    }
+  }
+
+  async function uploadTemplate(file: File | undefined) {
+    if (!file) {
+      return;
+    }
+
+    const token = window.localStorage.getItem(TOKEN_KEY);
+
+    if (!token) {
+      setTableError("Sign in again to upload the template.");
+      return;
+    }
+
+    setImporting(true);
+    setImportResult(null);
+    setTableError(null);
+
+    try {
+      const client = new ApiClient(token);
+      const result = await client.importMasterDataTemplate(file);
+      const resourcesToLoad = configs
+        .map((config) => config.resource)
+        .filter((resource) => canReadResource(resource, user));
+      const responses = await Promise.all(
+        resourcesToLoad.map(
+          async (resource) =>
+            [resource, await client.masterData(resource)] as const,
+        ),
+      );
+      const nextRecords = {
+        ...records,
+        ...Object.fromEntries(
+          responses.map(([resource, response]) => [resource, response.data]),
+        ),
+      };
+
+      setRecords(nextRecords);
+      setImportResult(result);
+      setSelectedId(null);
+      setForm(blankForm(activeConfig, nextRecords));
+      setRecipeLines([{ ...blankRecipeLine }]);
+      setYieldObservation(blankYieldObservation);
+    } catch (error) {
+      setTableError(
+        error instanceof Error ? error.message : "Unable to upload template.",
+      );
+    } finally {
+      setImporting(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  }
+
+  function downloadErrorReport() {
+    if (!importResult?.errorReportBase64) {
+      return;
+    }
+
+    downloadBase64File(
+      importResult.errorReportBase64,
+      importResult.errorReportFilename ?? "OGFI_Master_Data_Import_Errors.xlsx",
+    );
   }
 
   function selectRecord(record: MasterDataRecord) {
@@ -768,6 +860,43 @@ export function MasterDataLivePage({
             </p>
           </div>
         </div>
+        <div className="flex flex-wrap gap-2 md:justify-end">
+          <button
+            className="inline-flex h-10 items-center gap-2 rounded-md border border-og-line bg-white px-3 text-sm font-semibold text-og-dark transition hover:border-og-green disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={!canDownloadTemplate || importing}
+            onClick={() => void downloadTemplate()}
+            title={
+              canDownloadTemplate
+                ? "Download master data import template"
+                : "Requires read access to all master data sections"
+            }
+            type="button"
+          >
+            <Icon name="Download" size={16} />
+            Template
+          </button>
+          <button
+            className="inline-flex h-10 items-center gap-2 rounded-md bg-og-green px-3 text-sm font-semibold text-white transition hover:bg-og-green/90 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={!canImportTemplate || importing}
+            onClick={() => fileInputRef.current?.click()}
+            title={
+              canImportTemplate
+                ? "Upload completed master data workbook"
+                : "Requires create and update access to all master data sections"
+            }
+            type="button"
+          >
+            <Icon name={importing ? "RefreshCw" : "Upload"} size={16} />
+            {importing ? "Uploading" : "Upload"}
+          </button>
+          <input
+            accept=".xlsx"
+            className="hidden"
+            onChange={(event) => void uploadTemplate(event.target.files?.[0])}
+            ref={fileInputRef}
+            type="file"
+          />
+        </div>
       </section>
 
       <section className="grid gap-2 md:grid-cols-4 xl:grid-cols-8">
@@ -789,8 +918,53 @@ export function MasterDataLivePage({
             <Icon name={config.icon} size={18} />
             <span className="leading-4">{config.label}</span>
           </button>
-        ))}
+          ))}
       </section>
+
+      {importResult ? (
+        <section className="rounded-md border border-og-line bg-white p-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-og-dark">
+                Import finished: {importResult.imported} imported,{" "}
+                {importResult.created} created, {importResult.updated} updated,{" "}
+                {importResult.failed} failed
+              </p>
+              {importResult.failed > 0 ? (
+                <p className="mt-1 text-sm text-og-gray">
+                  Fix the downloadable error workbook, then upload it again.
+                </p>
+              ) : (
+                <p className="mt-1 text-sm text-og-gray">
+                  All rows in the workbook were accepted.
+                </p>
+              )}
+            </div>
+            {importResult.errorReportBase64 ? (
+              <button
+                className="inline-flex h-10 items-center gap-2 rounded-md border border-og-line bg-white px-3 text-sm font-semibold text-og-dark transition hover:border-og-green"
+                onClick={downloadErrorReport}
+                type="button"
+              >
+                <Icon name="FileSpreadsheet" size={16} />
+                Error Report
+              </button>
+            ) : null}
+          </div>
+          {importResult.errors.length > 0 ? (
+            <ul className="mt-3 space-y-2 text-sm text-og-gray">
+              {importResult.errors.slice(0, 3).map((error) => (
+                <li key={`${error.sheet}-${error.row}`}>
+                  <span className="font-semibold text-og-dark">
+                    {error.sheet} row {error.row}:
+                  </span>{" "}
+                  {error.errors.join(", ")}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
+      ) : null}
 
       <section
         className={`grid gap-4 ${
@@ -1872,6 +2046,20 @@ function canCreateResource(
   return user?.permissions.includes(`master-data.${resource}:create`) ?? false;
 }
 
+function canImportMasterDataTemplate(user: AuthenticatedUser | null) {
+  return configs.every(
+    (config) =>
+      user?.permissions.includes(`master-data.${config.resource}:create`) &&
+      user.permissions.includes(`master-data.${config.resource}:update`),
+  );
+}
+
+function canDownloadMasterDataTemplate(user: AuthenticatedUser | null) {
+  return configs.every((config) =>
+    user?.permissions.includes(`master-data.${config.resource}:read`),
+  );
+}
+
 function canReadResource(
   resource: MasterDataResource,
   user: AuthenticatedUser | null,
@@ -1909,4 +2097,32 @@ function resourcesNeededFor(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function downloadBase64File(base64: string, filename: string) {
+  const binary = window.atob(base64);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  downloadBlob(
+    new Blob([bytes], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }),
+    filename,
+  );
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
 }

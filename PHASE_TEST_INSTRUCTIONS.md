@@ -662,6 +662,48 @@ Expected result: unopened Master Data tabs are not fetched until needed.
 
 Expected result: inventory balances and transaction lists are always fetched from the server, not from client cache.
 
+## Master Data Excel Import
+
+Scope: Excel template download, bulk create/update import, partial success handling, and downloadable correction workbook for rejected rows.
+
+### 1. Template Download
+
+- Log in as an admin user with read access to all Master Data sections.
+- Open Master Data.
+- Click Template.
+- Open the downloaded workbook.
+- Confirm it includes the Instructions sheet and sheets for UOMs, Categories, Suppliers, Locations, Reason Codes, Items, UOM Conversions, Recipes, and Recipe Lines.
+- Confirm each data sheet has headers in row 1 and sample data in row 2.
+
+Expected result: the workbook can be used as the single source template for all Master Data imports.
+
+### 2. Valid Bulk Import
+
+- Fill out valid rows across at least UOMs, Categories, Suppliers, Locations, Items, Recipes, and Recipe Lines.
+- Keep the active column blank on at least one row.
+- Upload the workbook from Master Data.
+- Confirm the import summary shows imported rows with created/updated counts.
+- Refresh the affected Master Data tabs.
+- Confirm imported records are visible and blank active values default to Active.
+
+Expected result: valid rows are created or updated without needing one-by-one entry.
+
+### 3. Partial Import And Error Report
+
+- Upload a workbook with at least one valid row and at least one invalid row, such as a duplicate recipe line ingredient, missing SKU, invalid enum value, or missing UOM reference.
+- Confirm valid rows are still imported.
+- Confirm the summary shows failed rows.
+- Download the Error Report.
+- Open the report and confirm it contains only failed entries plus an errorMessages column.
+- Correct the workbook and upload the corrected Error Report.
+
+Expected result: users can fix rejected rows from the downloadable error workbook and resubmit it.
+
+### Known Limitations
+
+- The import endpoint requires create and update permissions for all Master Data sections because a single workbook can touch every section.
+- The template supports `.xlsx` workbooks only.
+
 ## Local Database Reset Script
 
 Scope: local-only database reset helper for development environments.

@@ -115,6 +115,23 @@ export type MasterDataRecord = {
   [key: string]: unknown;
 };
 
+export type MasterDataImportError = {
+  errors: string[];
+  row: number;
+  sheet: string;
+  values: Record<string, string>;
+};
+
+export type MasterDataImportResult = {
+  created: number;
+  errorReportBase64: string | null;
+  errorReportFilename: string | null;
+  errors: MasterDataImportError[];
+  failed: number;
+  imported: number;
+  updated: number;
+};
+
 export type PurchaseOrderLine = {
   id: string;
   itemId: string;
@@ -533,6 +550,31 @@ export class ApiClient {
   masterData<T extends MasterDataRecord>(resource: MasterDataResource) {
     return this.request<ApiListResponse<T>>(`/admin/${resource}?take=500`, {
       cacheTtlMs: referenceCacheTtlMs,
+    });
+  }
+
+  async downloadMasterDataTemplate() {
+    const response = await fetch(`${API_URL}/admin/master-data/import-template`, {
+      cache: "no-store",
+      headers: {
+        Authorization: `Bearer ${this.accessToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(await this.toErrorMessage(response));
+    }
+
+    return response.blob();
+  }
+
+  importMasterDataTemplate(file: File) {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    return this.request<MasterDataImportResult>("/admin/master-data/import", {
+      body: formData,
+      method: "POST",
     });
   }
 
